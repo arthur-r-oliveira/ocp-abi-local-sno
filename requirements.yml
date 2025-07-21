@@ -1,0 +1,5 @@
+# requirements.yml
+collections:
+  - community.libvirt
+  - ansible.posix
+  - community.general

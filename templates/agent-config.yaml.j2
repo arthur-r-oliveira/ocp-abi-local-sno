@@ -1,0 +1,33 @@
+apiVersion: v1alpha1
+kind: AgentConfig
+metadata:
+  name: {{ sno_hostname }}
+rendezvousIP: {{ sno_ip_address }}
+hosts:
+  - hostname: {{ sno_hostname }}.{{ sno_domain }}
+    interfaces:
+      - name: eth0
+        macAddress: "{{ vm_mac_address }}"
+    rootDeviceHints:
+      deviceName: /dev/vda
+    networkConfig:
+      interfaces:
+        - name: eth0
+          type: ethernet
+          state: up
+          mac-address: "{{ vm_mac_address }}"
+          ipv4:
+            enabled: true
+            address:
+              - ip: {{ sno_ip_address }}
+                prefix-length: 24
+            dhcp: false
+      dns-resolver:
+        config:
+          server:
+            - 192.168.122.1
+      routes:
+        config:
+          - destination: 0.0.0.0/0
+            next-hop-address: 192.168.122.1
+            next-hop-interface: eth0

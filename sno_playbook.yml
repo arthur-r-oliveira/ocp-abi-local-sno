@@ -1,0 +1,162 @@
+---
+- name: Deploy Single Node OpenShift on KVM
+  hosts: localhost
+  connection: local
+  become: true
+  vars_files:
+    - vars/main.yml
+
+  tasks:
+    - name: Install required packages
+      ansible.builtin.dnf:
+        name:
+          - qemu-kvm
+          - libvirt-daemon
+          - virt-install
+          - libvirt-client
+          - wget
+          - genisoimage
+          - qemu-img
+          - nmstate
+        state: present
+
+    - name: Ensure libvirtd service is started and enabled
+      ansible.builtin.service:
+        name: libvirtd
+        state: started
+        enabled: true
+
+    - name: Configure firewalld for libvirt
+      ansible.posix.firewalld:
+        zone: libvirt
+        service: "{{ item }}"
+        state: enabled
+        permanent: true
+        immediate: true
+      loop:
+        - dhcp
+        - dns
+        - http
+        - https
+
+    - name: Allow virtualization SELinux boolean
+      ansible.posix.seboolean:
+        name: virt_use_execmem
+        state: true
+        persistent: true
+
+    - name: Create installation directory
+      ansible.builtin.file:
+        path: "{{ sno_install_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Download OpenShift client
+      ansible.builtin.get_url:
+        url: "{{ oc_url }}"
+        dest: "/tmp/openshift-client-linux.tar.gz"
+        mode: '0644'
+
+    - name: Unarchive OpenShift client
+      ansible.builtin.unarchive:
+        src: "/tmp/openshift-client-linux.tar.gz"
+        dest: "/usr/local/bin"
+        remote_src: true
+        extra_opts:
+          - --transform
+          - s/oc/oc/
+          - --transform
+          - s/kubectl/kubectl/
+        creates: /usr/local/bin/oc
+
+    - name: Download OpenShift installer
+      ansible.builtin.get_url:
+        url: "{{ openshift_install_url }}"
+        dest: "/tmp/openshift-install-linux.tar.gz"
+        mode: '0644'
+
+    - name: Unarchive OpenShift installer
+      ansible.builtin.unarchive:
+        src: "/tmp/openshift-install-linux.tar.gz"
+        dest: "/usr/local/bin"
+        remote_src: true
+        extra_opts:
+          - --transform
+          - s/openshift-install/openshift-install/
+        creates: /usr/local/bin/openshift-install
+
+    - name: Create install-config.yaml from template
+      ansible.builtin.template:
+        src: templates/install-config.yaml.j2
+        dest: "{{ sno_install_dir }}/install-config.yaml"
+        mode: '0644'
+
+    - name: Create main OS disk image
+      ansible.builtin.command:
+        cmd: "qemu-img create -f qcow2 {{ sno_install_dir }}/{{ sno_vm_name }}.qcow2 {{ sno_disk_gb }}G"
+        creates: "{{ sno_install_dir }}/{{ sno_vm_name }}.qcow2"
+
+    - name: Create LVMS disk image
+      ansible.builtin.command:
+        cmd: "qemu-img create -f qcow2 {{ sno_install_dir }}/{{ sno_vm_name }}-lvms.qcow2 {{ sno_lvms_disk_gb }}G"
+        creates: "{{ sno_install_dir }}/{{ sno_vm_name }}-lvms.qcow2"
+
+    - name: Check if VM is already defined
+      community.libvirt.virt:
+        command: info
+        name: "{{ sno_vm_name }}"
+      register: vm_info_check
+      ignore_errors: true
+
+    - name: Define SNO VM if it does not exist
+      community.libvirt.virt:
+        command: define
+        xml: "{{ lookup('template', 'templates/vm-definition.xml.j2') }}"
+      when: vm_info_check.failed
+
+    - name: Get MAC address from the defined VM
+      community.libvirt.virt:
+        command: get_xml
+        name: "{{ sno_vm_name }}"
+      register: vm_xml_result
+
+    - name: Set MAC address fact
+      ansible.builtin.set_fact:
+        vm_mac_address: "{{ vm_xml_result.get_xml | regex_search(\"mac address='([^']+)'\", '\\1') | first }}"
+
+    - name: Create agent-config.yaml now that we have a MAC address
+      ansible.builtin.template:
+        src: templates/agent-config.yaml.j2
+        dest: "{{ sno_install_dir }}/agent-config.yaml"
+        mode: '0644'
+
+    - name: Create Agent Installer ISO and assets
+      ansible.builtin.command:
+        cmd: "openshift-install agent create image --dir={{ sno_install_dir }} --log-level=debug"
+        creates: "{{ sno_install_dir }}/agent.x86_64.iso"
+
+    - name: Configure static DHCP entry in libvirt
+      community.libvirt.virt_net:
+        command: modify
+        name: default
+        xml: '<host mac="{{ vm_mac_address }}" name="{{ sno_hostname }}" ip="{{ sno_ip_address }}"/>'
+        xpath: ./ip/dhcp
+      notify: Restart libvirtd
+
+    - name: Start the SNO VM
+      community.libvirt.virt:
+        name: "{{ sno_vm_name }}"
+        state: running
+
+    - name: Add API and Ingress entries to /etc/hosts
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "{{ sno_ip_address }} api.{{ sno_hostname }}.{{ sno_domain }} *.apps.{{ sno_hostname }}.{{ sno_domain }}"
+        regexp: "^{{ sno_ip_address }}"
+        state: present
+
+  handlers:
+    - name: Restart libvirtd
+      ansible.builtin.service:
+        name: libvirtd
+        state: restarted

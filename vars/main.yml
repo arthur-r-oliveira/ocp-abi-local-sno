@@ -1,0 +1,26 @@
+# vars/main.yml
+
+# VM Settings
+sno_vm_name: "local-sno"
+sno_vcpu: 8
+sno_ram_mb: 24576
+sno_disk_gb: 120
+sno_lvms_disk_gb: 50
+sno_install_dir: "/home/arolivei/sno-install"
+vm_mac_address: "00:16:3e:7e:4e:5f"
+
+# Network Settings
+sno_hostname: "local-sno"
+sno_domain: "apps.localhost"
+sno_ip_address: "192.168.122.100"
+sno_network_bridge: "virbr0"
+
+# OpenShift Settings
+openshift_version: "4.19"
+ocp_release_url: "https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/latest-{{ openshift_version }}"
+oc_url: "{{ ocp_release_url }}/openshift-client-linux.tar.gz"
+openshift_install_url: "{{ ocp_release_url }}/openshift-install-linux.tar.gz"
+#agent_iso_url: "{{ ocp_release_url }}/rhcos-{{ openshift_version }}.0-x86_64-live.x86_64.iso"
+agent_iso_url: https://mirror.openshift.com/pub/openshift-v4/x86_64/dependencies/rhcos/4.19/latest/rhcos-live-iso.x86_64.iso
+pull_secret_path: "/home/arolivei/Downloads/pull-secret.txt"
+ssh_public_key_path: "/home/arolivei/.ssh/id_rsa.pub"
