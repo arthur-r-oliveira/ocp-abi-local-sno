@@ -101,18 +101,10 @@
         cmd: "qemu-img create -f qcow2 {{ sno_install_dir }}/{{ sno_vm_name }}-lvms.qcow2 {{ sno_lvms_disk_gb }}G"
         creates: "{{ sno_install_dir }}/{{ sno_vm_name }}-lvms.qcow2"
 
-    - name: Check if VM is already defined
-      community.libvirt.virt:
-        command: info
-        name: "{{ sno_vm_name }}"
-      register: vm_info_check
-      ignore_errors: true
-
-    - name: Define SNO VM if it does not exist
+    - name: Ensure SNO VM is defined so we can get its MAC address
       community.libvirt.virt:
         command: define
         xml: "{{ lookup('template', 'templates/vm-definition.xml.j2') }}"
-      when: vm_info_check.failed
 
     - name: Get MAC address from the defined VM
       community.libvirt.virt:
@@ -136,12 +128,34 @@
         creates: "{{ sno_install_dir }}/agent.x86_64.iso"
 
     - name: Configure static DHCP entry in libvirt
-      community.libvirt.virt_net:
-        command: modify
-        name: default
-        xml: '<host mac="{{ vm_mac_address }}" name="{{ sno_hostname }}" ip="{{ sno_ip_address }}"/>'
-        xpath: ./ip/dhcp
-      notify: Restart libvirtd
+      block:
+        - name: Get current 'default' network configuration
+          community.libvirt.virt_net:
+            command: get_xml
+            name: default
+          register: current_net_xml
+          changed_when: false
+
+        - name: Add static host entry to network XML
+          community.general.xml:
+            xmlstring: "{{ current_net_xml.get_xml }}"
+            xpath: "/network/ip/dhcp/host[@mac='{{ vm_mac_address }}']"
+            state: present
+            add_children:
+              - host:
+                  '@ip': "{{ sno_ip_address }}"
+                  '@name': "{{ sno_hostname }}"
+            pretty_print: true
+          register: modified_net_xml
+          changed_when: current_net_xml.get_xml != modified_net_xml.xmlstring
+
+        - name: Apply updated 'default' network configuration
+          community.libvirt.virt_net:
+            command: define
+            name: default
+            xml: "{{ modified_net_xml.xmlstring }}"
+          when: modified_net_xml.changed
+          notify: Restart libvirtd
 
     - name: Start the SNO VM
       community.libvirt.virt:
