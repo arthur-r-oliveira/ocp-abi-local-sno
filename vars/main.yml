@@ -7,13 +7,13 @@ sno_ram_mb: 24576
 sno_disk_gb: 120
 sno_lvms_disk_gb: 50
 sno_install_dir: "/home/arolivei/sno-install"
-vm_mac_address: "00:16:3e:7e:4e:5f"
 
 # Network Settings
 sno_hostname: "local-sno"
 sno_domain: "apps.lab.corp"
 sno_ip_address: "192.168.122.100"
 sno_network_bridge: "virbr0"
+vm_mac_address: "00:16:3e:7e:4e:5f"
 
 # OpenShift Settings
 openshift_version: "4.19"
