@@ -7,71 +7,95 @@ This repository contains an Ansible playbook to automate the deployment of a Sin
 Before you begin, ensure you have the following:
 
 * A Fedora workstation with at least 32GB of RAM and 200GB of free disk space.  
-* The running user must have sudo privileges.  
+* A user with sudo privileges.  
 * Ansible Navigator installed: sudo dnf install ansible-navigator  
-* The necessary Ansible collections for libvirt, POSIX, and general community modules.
+* Podman or Docker installed and running.
 
-## **1\. Clone the Repository**
+## **1\. Clone or Set Up the Project Files**
 
-Clone this repository to your Fedora workstation:
+Ensure all the project files (sno\_playbook.yml, vars/main.yml, etc.) are in a single directory on your Fedora workstation.
 
-~~~
-git clone <repository_url>  
-cd <repository_name>
-~~~
+## **2\. Create the Ansible Navigator Configuration**
 
-## **2\. Install Ansible Collections**
+ansible-navigator uses execution environments to run playbooks in a consistent and isolated manner.
 
-Install the required Ansible collections using the requirements.yml file:
+First, create a file named requirements.yml to specify the collections needed:
 
-~~~
-ansible-galaxy collection install -r requirements.yml
-~~~
+\# requirements.yml  
+collections:  
+  \- community.libvirt  
+  \- ansible.posix  
+  \- community.general
+
+Next, create a file named execution-environment.yml. This file defines how to build your custom environment:
+
+\# execution-environment.yml  
+version: 3  
+images:  
+  base\_image:  
+    name: quay.io/ansible/creator-ee:latest  
+dependencies:  
+  galaxy: requirements.yml
+
+Finally, create the main ansible-navigator.yml configuration file. This tells ansible-navigator to use the build instructions you just defined:
+
+\# ansible-navigator.yml  
+\---  
+ansible-navigator:  
+  execution-environment:  
+    build:  
+      file: execution-environment.yml  
+      context: .  
+    image: sno-ee:latest  
+    pull:  
+      policy: missing  
+    container-engine: podman  
+    volume-mounts:  
+      \- src: "./"  
+        dest: "/home/runner/project"
 
 ## **3\. Customize Variables**
 
-All the customizable variables are in the vars/main.yml file. You can edit this file to change the VM specifications, network settings, and OpenShift version.
+All the customizable variables are in the vars/main.yml file.
 
-## **4. Run the Ansible Playbook**
+**IMPORTANT:**
 
-Execute the playbook using ansible-navigator or  ansible-playbook:
+* You must update the paths for pull\_secret\_path and ssh\_public\_key\_path.  
+* The sno\_domain should be a non-reserved domain (e.g., sno.test, mycluster.example). Do not use .localhost as it will conflict with systemd-resolved and cause the installation to fail.
 
-~~~
-ansible-navigator run sno_playbook.yml --mode stdout
-OR
-ansible-playbook sno_playbook.yml
-~~~
+## **4\. Run the Ansible Playbook**
 
-The playbook will perform the following actions:
+Before running the playbook, especially after a failed attempt, ensure you have a clean environment:
 
-1. **Install** necessary **packages:** Install qemu-kvm, libvirt, virt-install, and other dependencies.  
-2. **Configure the host:** Set up firewall rules and SELinux booleans.  
-3. **Download OpenShift assets:** Download the OpenShift client (oc), installer (openshift-install), and the agent-based installer ISO.  
-4. **Create the VM:** Provision a new KVM virtual machine with the specified resources.  
-5. **Configure networking:** Create a static DHCP entry for the VM in the libvirt default network.  
-6. **Generate installation files:** Create the install-config.yaml and agent-config.yaml files.  
-7. **Start the installation:** Boot the VM from the agent-based installer ISO to begin the OpenShift installation.  
-8. **Update /etc/hosts:** Add entries for the API and ingress URLs to your workstation's /etc/hosts file.
+\# Destroy any existing VM  
+sudo virsh destroy local-sno  
+sudo virsh undefine local-sno \--remove-all-storage
+
+\# Delete the old installation directory  
+sudo rm \-rf /home/arolivei/sno-install
+
+Execute the playbook using ansible-navigator. The \--mode stdout flag provides output similar to ansible-playbook.
+
+ansible-navigator run sno\_playbook.yml \--mode stdout
 
 ## **5\. Monitor the Installation**
 
-The installation process will take some time. You can monitor the progress by connecting to the VM's console using virsh:
+The installation process will take some time. You can monitor the progress by connecting to the VM's VNC console using a tool like virt-viewer or the Cockpit web interface.
 
-~~~
-virsh console local-sno
-~~~
+To monitor the installation progress from the host, run the following command. You must use sudo because the installation directory is owned by root.
 
-You can also monitor the installation by running the following command:
-
-~~~
-openshift-install --dir=sno-install agent wait-for install-complete
-~~~
+sudo openshift-install \--dir={{ sno\_install\_dir }} agent wait-for install-complete
 
 ## **6\. Access the Cluster**
 
-Once the installation is complete, you can access the OpenShift cluster using the oc command-line tool. The kubeconfig file will be located in the sno-install/auth directory.
+Once the installation is complete, the wait-for command will exit and provide you with the command to access your cluster. The kubeconfig file will be located in the sno-install/auth directory.
 
-~~~
-export KUBECONFIG=sno-install/auth/kubeconfig  
+export KUBECONFIG={{ sno\_install\_dir }}/auth/kubeconfig  
 oc get nodes
-~~~
+
+## **Troubleshooting**
+
+* **panic: interface conversion: asset.Asset is nil:** This error occurs when the wait-for command is run against an incomplete or stale installation directory. Always perform the full cleanup steps before re-running the playbook.  
+* **DNS Wildcard Error:** If the installation fails with a DNS wildcard error, ensure you are not using .localhost for your sno\_domain in vars/main.yml.  
+* **Blank Console:** If the virsh console is blank, connect to the VM's graphical console using virt-viewer or Cockpit to see the boot process.  
+* **Libvirt Errors:** If you encounter errors from libvirt about machine types, audio backends, or XML validation, ensure you are using the latest version of the vm-definition.xml.j2 template from this project.
