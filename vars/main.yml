@@ -11,7 +11,7 @@ vm_mac_address: "00:16:3e:7e:4e:5f"
 
 # Network Settings
 sno_hostname: "local-sno"
-sno_domain: "apps.localhost"
+sno_domain: "apps.lab.corp"
 sno_ip_address: "192.168.122.100"
 sno_network_bridge: "virbr0"
 
