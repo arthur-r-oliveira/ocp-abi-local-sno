@@ -11,36 +11,41 @@ Before you begin, ensure you have the following:
 * Ansible Navigator installed: sudo dnf install ansible-navigator  
 * Podman or Docker installed and running.
 
-## **1\. Clone or Set Up the Project Files**
+## **1. Clone or Set Up the Project Files**
 
-Ensure all the project files (sno\_playbook.yml, vars/main.yml, etc.) are in a single directory on your Fedora workstation.
+Ensure all the project files (`sno\_playbook.yml`, `vars/main.yml`, etc.) are in a single directory on your Fedora workstation.
 
-## **2\. Create the Ansible Navigator Configuration**
+## **2. Create the Ansible Navigator Configuration**
 
 ansible-navigator uses execution environments to run playbooks in a consistent and isolated manner.
 
-First, create a file named requirements.yml to specify the collections needed:
+First, create a file named `requirements.yml` to specify the collections needed:
 
-\# requirements.yml  
+~~~
+# requirements.yml  
 collections:  
-  \- community.libvirt  
-  \- ansible.posix  
-  \- community.general
+  - community.libvirt  
+  - ansible.posix  
+  - community.general
+~~~
 
-Next, create a file named execution-environment.yml. This file defines how to build your custom environment:
+Next, create a file named `execution-environment.yml`. This file defines how to build your custom environment:
 
-\# execution-environment.yml  
+~~~
+# execution-environment.yml  
 version: 3  
 images:  
-  base\_image:  
+  base_image:  
     name: quay.io/ansible/creator-ee:latest  
 dependencies:  
   galaxy: requirements.yml
+~~~
 
-Finally, create the main ansible-navigator.yml configuration file. This tells ansible-navigator to use the build instructions you just defined:
+Finally, create the main `ansible-navigator.yml` configuration file. This tells ansible-navigator to use the build instructions you just defined:
 
-\# ansible-navigator.yml  
-\---  
+~~~
+# ansible-navigator.yml
+---  
 ansible-navigator:  
   execution-environment:  
     build:  
@@ -51,47 +56,55 @@ ansible-navigator:
       policy: missing  
     container-engine: podman  
     volume-mounts:  
-      \- src: "./"  
+      - src: "./"  
         dest: "/home/runner/project"
+~~~
 
-## **3\. Customize Variables**
+## **3. Customize Variables**
 
 All the customizable variables are in the vars/main.yml file.
 
 **IMPORTANT:**
 
-* You must update the paths for pull\_secret\_path and ssh\_public\_key\_path.  
-* The sno\_domain should be a non-reserved domain (e.g., sno.test, mycluster.example). Do not use .localhost as it will conflict with systemd-resolved and cause the installation to fail.
+* You must update the paths for `pull_secret_path` and `ssh_public_key_path`.  
+* The `sno_domain` should be a non-reserved domain (e.g., sno.test, mycluster.example). Do not use .localhost as it will conflict with systemd-resolved and cause the installation to fail.
 
-## **4\. Run the Ansible Playbook**
+## **4. Run the Ansible Playbook**
 
 Before running the playbook, especially after a failed attempt, ensure you have a clean environment:
 
-\# Destroy any existing VM  
+~~~
+# Destroy any existing VM  
 sudo virsh destroy local-sno  
-sudo virsh undefine local-sno \--remove-all-storage
+sudo virsh undefine local-sno --remove-all-storage
+# Delete the old installation directory  
+sudo rm -rf /home/arolivei/sno-install
+~~~
 
-\# Delete the old installation directory  
-sudo rm \-rf /home/arolivei/sno-install
+Execute the playbook using `ansible-navigator`. The --mode stdout flag provides output similar to `ansible-playbook`.
 
-Execute the playbook using ansible-navigator. The \--mode stdout flag provides output similar to ansible-playbook.
+~~~
+ansible-navigator run sno_playbook.yml --mode stdout
+~~~
 
-ansible-navigator run sno\_playbook.yml \--mode stdout
-
-## **5\. Monitor the Installation**
+## **5. Monitor the Installation**
 
 The installation process will take some time. You can monitor the progress by connecting to the VM's VNC console using a tool like virt-viewer or the Cockpit web interface.
 
 To monitor the installation progress from the host, run the following command. You must use sudo because the installation directory is owned by root.
 
-sudo openshift-install \--dir={{ sno\_install\_dir }} agent wait-for install-complete
+~~~
+sudo openshift-install --dir={{ sno_install_dir }} agent wait-for install-complete
+~~~
 
-## **6\. Access the Cluster**
+## **6. Access the Cluster**
 
 Once the installation is complete, the wait-for command will exit and provide you with the command to access your cluster. The kubeconfig file will be located in the sno-install/auth directory.
 
-export KUBECONFIG={{ sno\_install\_dir }}/auth/kubeconfig  
+~~~
+export KUBECONFIG={{ sno_install_dir }}/auth/kubeconfig  
 oc get nodes
+~~~
 
 ## **Troubleshooting**
 
