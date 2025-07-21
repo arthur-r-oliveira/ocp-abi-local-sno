@@ -13,7 +13,7 @@ Before you begin, ensure you have the following:
 
 ## **1. Clone or Set Up the Project Files**
 
-Ensure all the project files (`sno\_playbook.yml`, `vars/main.yml`, etc.) are in a single directory on your Fedora workstation.
+Ensure all the project files (`sno_playbook.yml`, `vars/main.yml`, etc.) are in a single directory on your Fedora workstation.
 
 ## **2. Create the Ansible Navigator Configuration**
 
@@ -108,7 +108,5 @@ oc get nodes
 
 ## **Troubleshooting**
 
-* **panic: interface conversion: asset.Asset is nil:** This error occurs when the wait-for command is run against an incomplete or stale installation directory. Always perform the full cleanup steps before re-running the playbook.  
-* **DNS Wildcard Error:** If the installation fails with a DNS wildcard error, ensure you are not using .localhost for your sno\_domain in vars/main.yml.  
-* **Blank Console:** If the virsh console is blank, connect to the VM's graphical console using virt-viewer or Cockpit to see the boot process.  
-* **Libvirt Errors:** If you encounter errors from libvirt about machine types, audio backends, or XML validation, ensure you are using the latest version of the vm-definition.xml.j2 template from this project.
+* **panic: interface conversion: asset.Asset is nil:** This error occurs when the `openshift-install agent wait-for` command is run against an incomplete or stale installation directory. Always perform the full cleanup steps before re-running the playbook.  
+* **DNS Wildcard Error:** If the installation fails with a DNS wildcard error, ensure you are not using `.localhost` for your `sno_domain` in `vars/main.yml`.  
