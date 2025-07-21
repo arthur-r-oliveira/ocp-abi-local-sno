@@ -1,6 +1,6 @@
 # **Deploy a Single Node OpenShift (SNO) Cluster on KVM with Ansible**
 
-This repository contains an Ansible playbook to automate the deployment of a Single Node OpenShift (SNO) cluster on a KVM/libvirt hypervisor running on a Fedora workstation. The playbook uses the agent-based installer method.
+This repository contains an Ansible playbook to automate the deployment of a Single Node OpenShift (SNO) cluster on a KVM/libvirt hypervisor running on a Fedora workstation. The playbook uses the [agent-based installer method](https://docs.redhat.com/en/documentation/openshift_container_platform/latest/html/installing_an_on-premise_cluster_with_the_agent-based_installer/preparing-to-install-with-agent-based-installer).
 
 ## **Prerequisites**
 
