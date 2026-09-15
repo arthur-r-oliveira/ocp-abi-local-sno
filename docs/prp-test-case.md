@@ -106,7 +106,11 @@ The durable fix is the `kubernetes-nmstate-operator` + a
 Its handler runs the **real** `nmstatectl` directly on the node via a
 privileged DaemonSet pod - a completely different code path from the
 installer's broken Day-0 serializer - and correctly produces a keyfile
-with a real `[hsr]` section.
+with a real `[hsr]` section. This is also exactly the mechanism Red Hat's
+own KB on configuring HSR/PRP with nmstate calls out: it says this
+approach "aligns with the approach used by the OpenShift/MicroShift
+Kubernetes NMState Operator" - see "Alignment with Red Hat's KB" below
+for the full comparison.
 
 ### Extra wrinkle on 5.0.0-rc.2: the operator isn't in the default catalog yet
 
@@ -170,6 +174,7 @@ oc apply -f day2-manifests/01-nmstate-operator-subscription.yaml
 oc apply -f day2-manifests/02-nmstate-cr.yaml
 # wait: oc get pods -n openshift-nmstate -> nmstate-handler Running (1/1)
 oc apply -f day2-manifests/03-nncp-sno-a.yaml   # (or -sno-b.yaml, on that cluster)
+oc apply -f day2-manifests/04-hsr-module-autoload.yaml
 ```
 ```
 $ oc get nncp prp0-hsr
@@ -243,6 +248,21 @@ enp7s0 (prp-lan-a)   RX  3392B / 48pkt      TX  6660B / 82pkt
 enp8s0 (prp-lan-b)   RX  3392B / 48pkt      TX  6660B / 82pkt   <- identical
 ```
 
+### 5. Kernel-level PRP node table shows the peer
+
+Not just IP-level reachability - the HSR/PRP driver's own peer table,
+populated from real supervision frames:
+```
+$ ssh core@192.168.130.101 -- sudo cat /sys/kernel/debug/hsr/prp0/node_table
+Node Table entries for (PRP) device
+MAC-Address-A,    MAC-Address-B,    time_in[A], time_in[B], Address-B port, SAN-A, SAN-B, DAN-P
+52:54:00:aa:aa:02 00:00:00:00:00:00  100d23deb,  100d23deb,              0,     0,     0,     1
+```
+`DAN-P: 1` = sno-a has registered sno-b as a Dual Attached Node - PRP at
+the protocol level. Symmetric on sno-b (registers sno-a's MAC the same
+way). `scripts/test-prp-failover.sh` asserts this table is non-empty on
+both nodes.
+
 ### Pass criteria summary
 
 | Check | Expected | 5.0.0-rc.2 result |
@@ -252,20 +272,88 @@ enp8s0 (prp-lan-b)   RX  3392B / 48pkt      TX  6660B / 82pkt   <- identical
 | Slave port counters | identical on both ports | Pass |
 | Single-path failure, mid-traffic | **0% packet loss** for the duration | Pass - 97/97 |
 | Link restore | both ports return to `UP`/`LOWER_UP`, `prp0` still `proto 1` | Pass |
+| `/sys/kernel/debug/hsr/prp0/node_table` | peer MAC registered, `DAN-P: 1` | Pass |
 
-All five passed on both `sno-a` and `sno-b`, on both OCP versions tested.
+All six passed on both `sno-a` and `sno-b`, on both OCP versions tested.
 
-## Kernel module autoload - no action needed
+## Alignment with Red Hat's KB on configuring HSR/PRP with nmstate
 
-`prp0` depends on the `hsr` kernel module. It does **not** need an explicit
-`/etc/modules-load.d/` entry: `modinfo hsr` reports `alias: rtnl-link-hsr`,
-the same on-demand autoload mechanism the kernel uses for `bonding`/`vlan`/
-`bridge` - when NetworkManager asks for an hsr-type link, the kernel loads
-the module itself. Verified loaded on both nodes:
+Red Hat publishes an official KB, "How to configure HSR/PRP interfaces
+using nmstate in Red Hat Enterprise Linux" (RHEL 9.8+/10.2+ GA), that this
+work was checked against directly - including by testing its specific
+recommendations live against `sno-a`/`sno-b`, not just reading it.
+
+| KB says | This repo | Aligned? |
+|---|---|---|
+| nmstate is the recommended tool; explicitly "aligns with the approach used by the OpenShift/MicroShift Kubernetes NMState Operator" | Uses exactly that operator + NNCP for the Day-2 fix | **Yes** - this is the strongest validation: Red Hat names our approach as the recommended one |
+| `port1`/`port2`/`multicast-spec`/`protocol: prp` schema | Identical fields, identical structure | **Yes** |
+| GA in RHEL 9.8+ / RHEL 10.2+, no Tech Preview taint | RHCOS base confirmed as `VERSION_ID="10.2"`, `dmesg \| grep -i hsr` shows no taint/Tech-Preview warning | **Yes, confirmed live** |
+| `copy-mac-from: <port1>` on the hsr interface (replaces manually hardcoding a shared MAC on both ports) | Adopted in `day2-manifests/03-nncp-sno-*.yaml` after testing it live - see below | **Yes, adopted** |
+| Load `hsr` via `modprobe`, persist via `/etc/modules-load.d/` (KB 230963) | Was relying on the kernel's on-demand `rtnl-link-hsr` alias alone (verified working, including across a reboot) - now **also** ships `day2-manifests/04-hsr-module-autoload.yaml` for explicit alignment | **Yes, now added** |
+| Verify via `nmstatectl show`, `ip -s -s link`, and `/sys/kernel/debug/hsr/<if>/node_table` | Added the `node_table` check (§5 above and in the test script); already had the `ip`-based checks | **Yes** |
+| Failover test: bring one port down, confirm ~0% loss, restore | Same idea, done at the hypervisor level (`virsh domif-setlink`) rather than guest-level `ip link set down` - a stronger test (closer to an unplugged cable) | **Yes, and more rigorous** |
+
+### `copy-mac-from`: tested live, adopted, with an honest caveat
+
+The KB frames `copy-mac-from` as the modern replacement for manually
+setting an identical `mac-address` on both ports (which is what this repo
+did on OCP 4.19.45/5.0.0-rc.2's Day-0 config, before this KB was checked
+against). Tested directly against our nmstate 2.2.60 handler:
+```yaml
+- name: prp0
+  type: hsr
+  state: up
+  copy-mac-from: enp6s0
+  hsr:
+    port1: enp6s0
+    port2: enp7s0
+    multicast-spec: 0
+    protocol: prp
 ```
-$ lsmod | grep hsr
-hsr    65536  0
+Result: accepted, applied cleanly, and gives `prp0` itself an explicit
+matching MAC (not just the two ports) - confirmed in the resulting keyfile:
 ```
-and verified surviving a real reboot (the MCO-driven reboot during the
-OCP 4.19 run brought `prp0` back with `proto 1` with zero manual
-intervention).
+$ cat /etc/NetworkManager/system-connections/prp0-<uuid>.nmconnection
+[ethernet]
+cloned-mac-address=52:54:00:AA:AA:01
+[hsr]
+port1=enp6s0
+port2=enp7s0
+prp=true
+```
+```
+$ ip -br link show enp6s0; ip -br link show enp7s0; ip -br link show prp0
+enp6s0   UP   52:54:00:aa:aa:01   ...
+enp7s0   UP   52:54:00:aa:aa:01   ...
+prp0     UP   52:54:00:aa:aa:01   ...
+```
+PRP kept working throughout (`proto 1`, cross-node ping 0% loss, both
+NNCPs `Available`). **Caveat, straight from the KB's own internal notes**:
+Red Hat's authors flag open issues with `copy-mac-from` alone in some
+configurations (tracked as RHEL-75817, RHEL-85769, RHEL-40917, and
+nmstate/nmstate#2302), with a possible fallback of setting `mac-address`
+explicitly on all three interfaces (`port1`, `port2`, **and** the hsr
+interface itself) if it regresses. If `prp0` ever comes up with a MAC that
+doesn't match its ports after a nmstate/NetworkManager update, that's the
+first thing to check - and reverting to explicit `mac-address` values (as
+this repo did before adopting `copy-mac-from`) is the documented fallback,
+not a dead end.
+
+### Where this differs, and why that's fine
+
+- **Guest-level vs. hypervisor-level failover test.** The KB's example
+  (`ip link set down dev enp7s0`) tests NetworkManager/kernel behavior
+  from inside the guest. This repo's `virsh domif-setlink ... down` cuts
+  the link from outside the guest entirely - strictly a superset of what
+  the KB's test proves, not a substitute that's weaker in some way.
+- **`multicast-spec: 0` vs. the KB's example value of `40`.** Arbitrary in
+  both cases; it only has to match across every node in the same PRP
+  group, which it does here (`sno-a` and `sno-b` both use `0`).
+- **This repo's context is OpenShift's agent-based installer's Day-0
+  pipeline**, which the KB doesn't cover at all (it's written for direct
+  RHEL/nmstate usage via `nmstatectl apply` against a policy file under
+  `/etc/nmstate/`). The Day-0 serializer bug documented above is specific
+  to that installer pipeline, not something the KB would have caught or
+  needs to address - but the underlying nmstate schema it confirms
+  (`port1`/`port2`/`protocol`/`copy-mac-from`) is exactly what both paths
+  ultimately rely on.

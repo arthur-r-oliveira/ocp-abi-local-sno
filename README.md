@@ -60,6 +60,7 @@ oc apply -f day2-manifests/01-nmstate-operator-subscription.yaml
 oc apply -f day2-manifests/02-nmstate-cr.yaml
 # wait for: oc get pods -n openshift-nmstate  ->  nmstate-handler Running
 oc apply -f day2-manifests/03-nncp-sno-a.yaml   # or 03-nncp-sno-b.yaml
+oc apply -f day2-manifests/04-hsr-module-autoload.yaml
 ```
 
 Full details, exact commands, and real output from an actual run: **docs/installation.md**.
