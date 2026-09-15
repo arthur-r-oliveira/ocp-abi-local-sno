@@ -36,7 +36,8 @@ sno_libvirt_networks:
   - name: "{{ net_prp_lan_b }}"
     template: "templates/networks/prp-lan-b.xml.j2"
 
-# ocp-public addressing (eth0/eth1, cluster API+Ingress+egress)
+# ocp-public addressing (eth0 only - a single dedicated NIC carries
+# br-ex/API/Ingress/egress; see vm-definition.xml.j2 for the 3-NIC layout)
 ocp_public_gateway: "192.168.130.1"
 ocp_public_prefix: 24
 ocp_public_subnet_cidr: "192.168.130.0/24"
@@ -56,11 +57,11 @@ sno_nodes:
     install_dir: "{{ sno_storage_base }}/sno-install/sno-a"
     ip_address: "192.168.130.101"
     prp_ip_address: "10.10.10.1"
-    # eth2 and eth3 MUST share this exact MAC: prp0 is one logical LRE
+    # eth1 and eth2 MUST share this exact MAC: prp0 is one logical LRE
     # identity presented out both ports, and nmstate's hsr validation
     # (confirmed against nmstatectl 2.2.60) rejects differing port MACs.
-    # Must differ from sno-b's, since both nodes' eth2 share prp-lan-a
-    # (and eth3 shares prp-lan-b) on the wire.
+    # Must differ from sno-b's, since both nodes' eth1 share prp-lan-a
+    # (and eth2 shares prp-lan-b) on the wire.
     prp_mac_address: "52:54:00:aa:aa:01"
   - vm_name: "sno-b"
     hostname: "sno-b"
@@ -70,11 +71,14 @@ sno_nodes:
     prp_mac_address: "52:54:00:aa:aa:02"
 
 # OpenShift Settings
-openshift_version: "4.19"
-ocp_release_url: "https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/latest-{{ openshift_version }}"
+# 5.0.0-rc.2 is a pre-GA release candidate - it has no "latest-5.0" alias
+# (that convention only exists for GA channels), so ocp_release_url pins
+# the exact RC path directly. openshift-install itself resolves and
+# fetches its own matching RHCOS/agent ISO internally at "agent create
+# image" time - there is no separate agent_iso_url to set.
+openshift_version: "5.0.0-rc.2"
+ocp_release_url: "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/{{ openshift_version }}"
 oc_url: "{{ ocp_release_url }}/openshift-client-linux.tar.gz"
 openshift_install_url: "{{ ocp_release_url }}/openshift-install-linux.tar.gz"
-#agent_iso_url: "{{ ocp_release_url }}/rhcos-{{ openshift_version }}.0-x86_64-live.x86_64.iso"
-agent_iso_url: https://mirror.openshift.com/pub/openshift-v4/x86_64/dependencies/rhcos/4.19/latest/rhcos-live-iso.x86_64.iso
 pull_secret_path: "/root/secrets/pull-secret.json"
 ssh_public_key_path: "/root/secrets/sno_id_ed25519.pub"

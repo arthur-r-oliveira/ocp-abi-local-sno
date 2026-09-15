@@ -1,0 +1,7 @@
+# Singleton CR that tells the operator to actually deploy its handler
+# DaemonSet, webhook, and metrics/console-plugin pods. Apply once the
+# Subscription's CSV shows PHASE Succeeded.
+apiVersion: nmstate.io/v1
+kind: NMState
+metadata:
+  name: nmstate

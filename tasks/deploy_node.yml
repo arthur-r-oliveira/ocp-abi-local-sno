@@ -36,12 +36,12 @@
   register: vm_xml_result
 
 # regex_findall preserves document order, which matches the interface
-# order written in vm-definition.xml.j2 (ocp-public, ocp-public,
-# prp-lan-a, prp-lan-b) -> eth0..eth3. If you ever reorder the
-# <interface> blocks in that template, this mapping must move with them.
-- name: "[{{ node.vm_name }}] Map MAC addresses to eth0..eth3 by interface order"
+# order written in vm-definition.xml.j2 (ocp-public, prp-lan-a,
+# prp-lan-b) -> eth0..eth2. If you ever reorder the <interface> blocks
+# in that template, this mapping must move with them.
+- name: "[{{ node.vm_name }}] Map MAC addresses to eth0..eth2 by interface order"
   ansible.builtin.set_fact:
-    node_macs: "{{ dict(['eth0', 'eth1', 'eth2', 'eth3'] | zip(vm_xml_result.get_xml | regex_findall(\"mac address='([^']+)'\"))) }}"
+    node_macs: "{{ dict(['eth0', 'eth1', 'eth2'] | zip(vm_xml_result.get_xml | regex_findall(\"mac address='([^']+)'\"))) }}"
 
 - name: "[{{ node.vm_name }}] Create agent-config.yaml now that we have MAC addresses"
   ansible.builtin.template:
