@@ -1,0 +1,14 @@
+<network>
+  <name>prp-lan-a</name>
+  <bridge name='virbr-prp-a' stp='off' delay='0'/>
+  <!--
+    Deliberately no <forward> and no <ip> element:
+      - no <forward>  -> libvirt does not NAT/route this network, pure L2 only
+      - no <ip>       -> the host bridge itself gets no IP, and there is no
+                          embedded dnsmasq, so no DHCP/DNS is offered here
+    STP is off because this is a single flat segment shared only by the
+    PRP LRE ports of the SNO nodes attached to it; there is no loop to
+    protect against, and STP would only add convergence delay to a link
+    that PRP itself is testing.
+  -->
+</network>

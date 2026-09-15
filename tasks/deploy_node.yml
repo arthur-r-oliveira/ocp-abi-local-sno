@@ -1,0 +1,100 @@
+# tasks/deploy_node.yml
+# Included by sno_playbook.yml with `loop: "{{ sno_nodes }}"` and
+# `loop_control.loop_var: node`. Everything here is scoped to one SNO node.
+
+- name: "[{{ node.vm_name }}] Create installation directory"
+  ansible.builtin.file:
+    path: "{{ node.install_dir }}"
+    state: directory
+    mode: '0755'
+
+- name: "[{{ node.vm_name }}] Create install-config.yaml from template"
+  ansible.builtin.template:
+    src: templates/install-config.yaml.j2
+    dest: "{{ node.install_dir }}/install-config.yaml"
+    mode: '0644'
+
+- name: "[{{ node.vm_name }}] Create main OS disk image"
+  ansible.builtin.command:
+    cmd: "qemu-img create -f qcow2 {{ node.install_dir }}/{{ node.vm_name }}.qcow2 {{ sno_disk_gb }}G"
+    creates: "{{ node.install_dir }}/{{ node.vm_name }}.qcow2"
+
+- name: "[{{ node.vm_name }}] Create LVMS disk image"
+  ansible.builtin.command:
+    cmd: "qemu-img create -f qcow2 {{ node.install_dir }}/{{ node.vm_name }}-lvms.qcow2 {{ sno_lvms_disk_gb }}G"
+    creates: "{{ node.install_dir }}/{{ node.vm_name }}-lvms.qcow2"
+
+- name: "[{{ node.vm_name }}] Ensure SNO VM is defined so we can get its MAC addresses"
+  community.libvirt.virt:
+    command: define
+    xml: "{{ lookup('template', 'templates/vm-definition.xml.j2') }}"
+
+- name: "[{{ node.vm_name }}] Get MAC addresses from the defined VM"
+  community.libvirt.virt:
+    command: get_xml
+    name: "{{ node.vm_name }}"
+  register: vm_xml_result
+
+# regex_findall preserves document order, which matches the interface
+# order written in vm-definition.xml.j2 (ocp-public, ocp-public,
+# prp-lan-a, prp-lan-b) -> eth0..eth3. If you ever reorder the
+# <interface> blocks in that template, this mapping must move with them.
+- name: "[{{ node.vm_name }}] Map MAC addresses to eth0..eth3 by interface order"
+  ansible.builtin.set_fact:
+    node_macs: "{{ dict(['eth0', 'eth1', 'eth2', 'eth3'] | zip(vm_xml_result.get_xml | regex_findall(\"mac address='([^']+)'\"))) }}"
+
+- name: "[{{ node.vm_name }}] Create agent-config.yaml now that we have MAC addresses"
+  ansible.builtin.template:
+    src: templates/agent-config.yaml.j2
+    dest: "{{ node.install_dir }}/agent-config.yaml"
+    mode: '0644'
+
+- name: "[{{ node.vm_name }}] Create Agent Installer ISO and assets"
+  ansible.builtin.command:
+    cmd: "openshift-install agent create image --dir={{ node.install_dir }} --log-level=debug"
+    creates: "{{ node.install_dir }}/agent.x86_64.iso"
+
+- name: "[{{ node.vm_name }}] Configure static DHCP entry on ocp-public"
+  block:
+    - name: "[{{ node.vm_name }}] Get current '{{ net_ocp_public }}' network configuration"
+      community.libvirt.virt_net:
+        command: get_xml
+        name: "{{ net_ocp_public }}"
+      register: current_net_xml
+      changed_when: false
+
+    - name: "[{{ node.vm_name }}] Add static host entry to network XML"
+      community.general.xml:
+        xmlstring: "{{ current_net_xml.get_xml }}"
+        xpath: "/network/ip/dhcp/host[@mac='{{ node_macs.eth0 }}']"
+        state: present
+        add_children:
+          - host:
+              '@ip': "{{ node.ip_address }}"
+              '@name': "{{ node.hostname }}"
+        pretty_print: true
+      register: modified_net_xml
+      changed_when: current_net_xml.get_xml != modified_net_xml.xmlstring
+
+    - name: "[{{ node.vm_name }}] Apply updated '{{ net_ocp_public }}' network configuration"
+      community.libvirt.virt_net:
+        command: define
+        name: "{{ net_ocp_public }}"
+        xml: "{{ modified_net_xml.xmlstring }}"
+      when: modified_net_xml.changed
+      notify: Restart libvirtd
+
+- name: "[{{ node.vm_name }}] Start the SNO VM"
+  community.libvirt.virt:
+    name: "{{ node.vm_name }}"
+    state: running
+
+- name: "[{{ node.vm_name }}] Add API and Ingress entries to /etc/hosts"
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    # /etc/hosts has no wildcard support - "*.apps..." here is a silent
+    # no-op, not a wildcard match. List every route host actually needed
+    # (console/download/oauth) explicitly instead.
+    line: "{{ node.ip_address }} api.{{ node.hostname }}.{{ sno_domain }} console-openshift-console.apps.{{ node.hostname }}.{{ sno_domain }} downloads-openshift-console.apps.{{ node.hostname }}.{{ sno_domain }} oauth-openshift.apps.{{ node.hostname }}.{{ sno_domain }}"
+    regexp: "^{{ node.ip_address }}"
+    state: present

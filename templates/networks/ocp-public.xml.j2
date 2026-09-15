@@ -1,0 +1,16 @@
+<network>
+  <name>ocp-public</name>
+  <forward mode='nat'/>
+  <bridge name='virbr-public' stp='on' delay='0'/>
+  <domain name='ocp-public.local' localOnly='yes'/>
+  <ip address='{{ ocp_public_gateway }}' netmask='255.255.255.0'>
+    <dhcp>
+      <!--
+        Real hosts get static reservations added by sno_playbook.yml
+        (see the "Configure static DHCP entry" task). This range only
+        covers stray/unmanaged clients.
+      -->
+      <range start='192.168.130.200' end='192.168.130.250'/>
+    </dhcp>
+  </ip>
+</network>

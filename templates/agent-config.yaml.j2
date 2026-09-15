@@ -1,13 +1,29 @@
 apiVersion: v1alpha1
 kind: AgentConfig
 metadata:
-  name: {{ sno_hostname }}
-rendezvousIP: {{ sno_ip_address }}
+  name: {{ node.hostname }}
+rendezvousIP: {{ node.ip_address }}
+# The isolated PRP LANs have no route to a public NTP pool, and even on
+# ocp-public we don't want cluster bring-up depending on outbound NTP
+# reachability - point nodes at this KVM host's own chronyd instead
+# (see sno_playbook.yml's "Allow SNO nodes to query this host's chronyd").
+additionalNTPSources:
+  - {{ ocp_public_gateway }}
 hosts:
-  - hostname: {{ sno_hostname }}.{{ sno_domain }}
+  - hostname: {{ node.hostname }}.{{ sno_domain }}
+    # These name<->MAC bindings are what let us use the logical names
+    # eth0..eth3 below regardless of whatever predictable name (enpXsY)
+    # the kernel would otherwise assign - the agent installer generates
+    # udev/systemd-link rules from this list at Day 0.
     interfaces:
       - name: eth0
-        macAddress: "{{ vm_mac_address }}"
+        macAddress: "{{ node_macs.eth0 }}"
+      - name: eth1
+        macAddress: "{{ node_macs.eth1 }}"
+      - name: eth2
+        macAddress: "{{ node_macs.eth2 }}"
+      - name: eth3
+        macAddress: "{{ node_macs.eth3 }}"
     rootDeviceHints:
       deviceName: /dev/vda
     networkConfig:
@@ -15,19 +31,79 @@ hosts:
         - name: eth0
           type: ethernet
           state: up
-          mac-address: "{{ vm_mac_address }}"
+          mac-address: "{{ node_macs.eth0 }}"
           ipv4:
             enabled: true
-            address:
-              - ip: {{ sno_ip_address }}
-                prefix-length: 24
             dhcp: false
+            address:
+              - ip: {{ node.ip_address }}
+                prefix-length: {{ ocp_public_prefix }}
+          ipv6:
+            enabled: false
+        - name: eth1
+          type: ethernet
+          state: up
+          mac-address: "{{ node_macs.eth1 }}"
+          ipv4:
+            enabled: false
+          ipv6:
+            enabled: false
+        # eth2/eth3 are the PRP LRE slave ports: no IP of their own, they
+        # only carry frames for the prp0 interface below. mac-address here
+        # is deliberately node.prp_mac_address (shared by both ports), NOT
+        # each port's own hardware MAC (node_macs.eth2/eth3) - nmstate
+        # applies this as the port's operational MAC via NetworkManager,
+        # on top of the distinct hardware MAC used above (in `hosts:`) for
+        # udev-based renaming. HSR/PRP requires both LRE ports to present
+        # one shared logical MAC; the hardware MACs must stay distinct or
+        # renaming is ambiguous.
+        - name: eth2
+          type: ethernet
+          state: up
+          mac-address: "{{ node.prp_mac_address }}"
+          ipv4:
+            enabled: false
+          ipv6:
+            enabled: false
+        - name: eth3
+          type: ethernet
+          state: up
+          mac-address: "{{ node.prp_mac_address }}"
+          ipv4:
+            enabled: false
+          ipv6:
+            enabled: false
+        # Day-0 PRP: bind eth2 (prp-lan-a) + eth3 (prp-lan-b) into a single
+        # Link Redundancy Entity via the kernel hsr driver in "prp" mode
+        # (RFC 62439-3). Every frame prp0 sends goes out BOTH eth2 and
+        # eth3 with a Redundancy Check Trailer appended; duplicates
+        # arriving from either LAN are suppressed on receive. Both
+        # sno-a and sno-b get this same shape, and eth2/eth3 on both
+        # nodes land on the same isolated bridges (prp-lan-a/prp-lan-b),
+        # so the two nodes' prp0 interfaces are directly L2-adjacent
+        # over BOTH redundant paths.
+        - name: prp0
+          type: hsr
+          state: up
+          hsr:
+            port1: eth2
+            port2: eth3
+            multicast-spec: {{ prp_multicast_spec }}
+            protocol: prp
+          ipv4:
+            enabled: true
+            dhcp: false
+            address:
+              - ip: {{ node.prp_ip_address }}
+                prefix-length: {{ prp_prefix_length }}
+          ipv6:
+            enabled: false
       dns-resolver:
         config:
           server:
-            - 192.168.122.1
+            - {{ ocp_public_gateway }}
       routes:
         config:
           - destination: 0.0.0.0/0
-            next-hop-address: 192.168.122.1
+            next-hop-address: {{ ocp_public_gateway }}
             next-hop-interface: eth0

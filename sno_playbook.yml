@@ -1,5 +1,5 @@
 ---
-- name: Deploy Single Node OpenShift on KVM
+- name: Deploy two PRP-connected Single Node OpenShift clusters on KVM
   hosts: localhost
   connection: local
   become: true
@@ -12,10 +12,13 @@
         name:
           - qemu-kvm
           - libvirt-daemon
+          - libvirt-daemon-driver-network
+          - libvirt-daemon-driver-qemu
           - virt-install
           - libvirt-client
+          - libvirt-python3
           - wget
-          - genisoimage
+          - xorriso
           - qemu-img
           - nmstate
         state: present
@@ -38,18 +41,21 @@
         - dns
         - http
         - https
+        - ntp
+
+    - name: Allow SNO nodes to query this host's chronyd for NTP
+      ansible.builtin.lineinfile:
+        path: /etc/chrony.conf
+        line: "allow {{ ocp_public_subnet_cidr }}"
+        insertafter: EOF
+        state: present
+      notify: Restart chronyd
 
     - name: Allow virtualization SELinux boolean
       ansible.posix.seboolean:
         name: virt_use_execmem
         state: true
         persistent: true
-
-    - name: Create installation directory
-      ansible.builtin.file:
-        path: "{{ sno_install_dir }}"
-        state: directory
-        mode: '0755'
 
     - name: Download OpenShift client
       ansible.builtin.get_url:
@@ -85,92 +91,64 @@
           - s/openshift-install/openshift-install/
         creates: /usr/local/bin/openshift-install
 
-    - name: Create install-config.yaml from template
-      ansible.builtin.template:
-        src: templates/install-config.yaml.j2
-        dest: "{{ sno_install_dir }}/install-config.yaml"
-        mode: '0644'
+    - name: Ensure VM storage base directory exists on a filesystem with room
+      ansible.builtin.file:
+        path: "{{ sno_storage_base }}"
+        state: directory
+        mode: '0711'
+        owner: root
+        group: root
 
-    - name: Create main OS disk image
-      ansible.builtin.command:
-        cmd: "qemu-img create -f qcow2 {{ sno_install_dir }}/{{ sno_vm_name }}.qcow2 {{ sno_disk_gb }}G"
-        creates: "{{ sno_install_dir }}/{{ sno_vm_name }}.qcow2"
-
-    - name: Create LVMS disk image
-      ansible.builtin.command:
-        cmd: "qemu-img create -f qcow2 {{ sno_install_dir }}/{{ sno_vm_name }}-lvms.qcow2 {{ sno_lvms_disk_gb }}G"
-        creates: "{{ sno_install_dir }}/{{ sno_vm_name }}-lvms.qcow2"
-
-    - name: Ensure SNO VM is defined so we can get its MAC address
-      community.libvirt.virt:
-        command: define
-        xml: "{{ lookup('template', 'templates/vm-definition.xml.j2') }}"
-
-    - name: Get MAC address from the defined VM
-      community.libvirt.virt:
-        command: get_xml
-        name: "{{ sno_vm_name }}"
-      register: vm_xml_result
-
-    - name: Set MAC address fact
-      ansible.builtin.set_fact:
-        vm_mac_address: "{{ vm_xml_result.get_xml | regex_search(\"mac address='([^']+)'\", '\\1') | first }}"
-
-    - name: Create agent-config.yaml now that we have a MAC address
-      ansible.builtin.template:
-        src: templates/agent-config.yaml.j2
-        dest: "{{ sno_install_dir }}/agent-config.yaml"
-        mode: '0644'
-
-    - name: Create Agent Installer ISO and assets
-      ansible.builtin.command:
-        cmd: "openshift-install agent create image --dir={{ sno_install_dir }} --log-level=debug"
-        creates: "{{ sno_install_dir }}/agent.x86_64.iso"
-
-    - name: Configure static DHCP entry in libvirt
-      block:
-        - name: Get current 'default' network configuration
-          community.libvirt.virt_net:
-            command: get_xml
-            name: default
-          register: current_net_xml
-          changed_when: false
-
-        - name: Add static host entry to network XML
-          community.general.xml:
-            xmlstring: "{{ current_net_xml.get_xml }}"
-            xpath: "/network/ip/dhcp/host[@mac='{{ vm_mac_address }}']"
-            state: present
-            add_children:
-              - host:
-                  '@ip': "{{ sno_ip_address }}"
-                  '@name': "{{ sno_hostname }}"
-            pretty_print: true
-          register: modified_net_xml
-          changed_when: current_net_xml.get_xml != modified_net_xml.xmlstring
-
-        - name: Apply updated 'default' network configuration
-          community.libvirt.virt_net:
-            command: define
-            name: default
-            xml: "{{ modified_net_xml.xmlstring }}"
-          when: modified_net_xml.changed
-          notify: Restart libvirtd
-
-    - name: Start the SNO VM
-      community.libvirt.virt:
-        name: "{{ sno_vm_name }}"
-        state: running
-
-    - name: Add API and Ingress entries to /etc/hosts
-      ansible.builtin.lineinfile:
-        path: /etc/hosts
-        line: "{{ sno_ip_address }} api.{{ sno_hostname }}.{{ sno_domain }} *.apps.{{ sno_hostname }}.{{ sno_domain }}"
-        regexp: "^{{ sno_ip_address }}"
+    - name: Ensure SELinux context allows libvirt/qemu to use this storage path
+      community.general.sefcontext:
+        target: "{{ sno_storage_base }}(/.*)?"
+        setype: virt_image_t
         state: present
+      register: sno_storage_sefcontext
+
+    - name: Apply SELinux context to any existing files under the storage path
+      ansible.builtin.command: "restorecon -R {{ sno_storage_base }}"
+      when: sno_storage_sefcontext.changed
+
+    # --- Shared libvirt networks: ocp-public (NAT) + prp-lan-a/b (isolated) ---
+    - name: Define shared libvirt networks
+      community.libvirt.virt_net:
+        command: define
+        name: "{{ item.name }}"
+        xml: "{{ lookup('template', item.template) }}"
+      loop: "{{ sno_libvirt_networks }}"
+
+    - name: Ensure shared libvirt networks are active
+      community.libvirt.virt_net:
+        command: create
+        name: "{{ item.name }}"
+      loop: "{{ sno_libvirt_networks }}"
+      register: net_create_result
+      failed_when:
+        - net_create_result is failed
+        - "'already active' not in (net_create_result.msg | default(''))"
+
+    - name: Set shared libvirt networks to autostart
+      community.libvirt.virt_net:
+        name: "{{ item.name }}"
+        autostart: true
+      loop: "{{ sno_libvirt_networks }}"
+
+    # --- Per-node deploy: repeats disk/VM/ignition/start for each SNO ---
+    - name: Deploy each SNO node
+      ansible.builtin.include_tasks: tasks/deploy_node.yml
+      loop: "{{ sno_nodes }}"
+      loop_control:
+        loop_var: node
+        label: "{{ node.vm_name }}"
 
   handlers:
     - name: Restart libvirtd
       ansible.builtin.service:
         name: libvirtd
+        state: restarted
+
+    - name: Restart chronyd
+      ansible.builtin.service:
+        name: chronyd
         state: restarted
