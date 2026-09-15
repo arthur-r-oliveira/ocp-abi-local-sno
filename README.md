@@ -40,7 +40,8 @@ two dedicated to PRP - nothing shared between roles.
 | `sno_playbook.yml`, `tasks/deploy_node.yml`, `vars/main.yml` | The Ansible playbook - libvirt networks, VM definitions, ignition/agent-config generation, one loop iteration per node in `vars/main.yml`'s `sno_nodes` list |
 | `templates/` | Jinja templates for the 3 libvirt networks, the VM domain XML, and the agent-based installer's `install-config.yaml`/`agent-config.yaml` |
 | `day2-manifests/` | Applied via `oc apply` **after** `install-complete`, once per cluster - installs `kubernetes-nmstate-operator` and configures `prp0` via `NodeNetworkConfigurationPolicy`. Not part of the ansible run; see docs/prp-test-case.md for why this has to be Day-2 |
-| `scripts/` | `add-cluster-hosts.sh` (per-node `/etc/hosts` entries) and `prp-lab-tunnel.sh` (an `sshuttle` tunnel scoped to `ocp-public` only, for reaching the VMs from a workstation that isn't the KVM host) |
+| `scripts/` | `add-cluster-hosts.sh` (per-node `/etc/hosts` entries), `prp-lab-tunnel.sh` (an `sshuttle` tunnel scoped to `ocp-public` only, for reaching the VMs from a workstation that isn't the KVM host), and `test-prp-failover.sh` (the CI test suite - see below) |
+| `.github/workflows/prp-test.yml` | Runs `test-prp-failover.sh` on a self-hosted runner registered on the KVM host - can't run on GitHub's hosted runners, this needs real `virsh`/SSH access to the VMs |
 | `docs/` | The real documentation - read this, not this file |
 
 ## Quick start
@@ -62,3 +63,15 @@ oc apply -f day2-manifests/03-nncp-sno-a.yaml   # or 03-nncp-sno-b.yaml
 ```
 
 Full details, exact commands, and real output from an actual run: **docs/installation.md**.
+
+## Testing
+
+```
+./scripts/test-prp-failover.sh
+```
+Checks both clusters' health, confirms `prp0` is up in true PRP mode on
+both nodes, verifies cross-node reachability, then actually cuts
+`prp-lan-a` at the hypervisor level mid-ping and asserts **0% packet
+loss**. Exits non-zero on any failure - wired into CI via
+`.github/workflows/prp-test.yml` (self-hosted runner only; GitHub's
+hosted runners have no `virsh`).
