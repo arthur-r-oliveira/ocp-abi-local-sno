@@ -29,6 +29,9 @@ two dedicated to PRP - nothing shared between roles.
 - **[docs/prp-test-case.md](docs/prp-test-case.md)** - the PRP mechanism, the
   installer bug that blocks it at Day-0, the Day-2 fix via the
   `kubernetes-nmstate-operator`, and a real hypervisor-level failover test.
+- **[docs/prp-hackathon-report.html](docs/prp-hackathon-report.html)** - a
+  standalone, self-contained visual summary of the above (open directly in a
+  browser) - built for sharing outside the repo.
 
 ## Layout
 
