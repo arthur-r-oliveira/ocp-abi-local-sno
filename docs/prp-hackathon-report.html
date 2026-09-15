@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PRP over Dual SNO</title>
+<meta name="description" content="How to run a real IEC 62439-3 PRP link between two independent OpenShift SNO clusters on KVM - architecture, the installer bug we found, the fix, and a live failover proof." />
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+  :root{
+    --bg:#f3f5f4; --surface:#ffffff; --surface-2:#eef1ef;
+    --ink:#101615; --muted:#55635f; --border:#dbe2de;
+    --accent:#0f766e; --accent-ink:#ffffff; --accent-soft:#e3f1ee;
+    --ok:#157f4a; --ok-bg:#e7f5ec;
+    --warn:#a15c00; --warn-bg:#fbf0e0;
+    --code-bg:#0d1412; --code-ink:#d9e6e0;
+    --shadow: 0 1px 2px rgba(16,22,21,.04), 0 8px 24px -12px rgba(16,22,21,.10);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0a0f0e; --surface:#101715; --surface-2:#141c19;
+      --ink:#e7ece9; --muted:#8ba39c; --border:#20302b;
+      --accent:#2dd4bf; --accent-ink:#052a26; --accent-soft:#122824;
+      --ok:#4fd08a; --ok-bg:#123024;
+      --warn:#e3ab4f; --warn-bg:#2e2210;
+      --code-bg:#060a09; --code-ink:#cfe4dc;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 30px -14px rgba(0,0,0,.55);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0a0f0e; --surface:#101715; --surface-2:#141c19;
+    --ink:#e7ece9; --muted:#8ba39c; --border:#20302b;
+    --accent:#2dd4bf; --accent-ink:#052a26; --accent-soft:#122824;
+    --ok:#4fd08a; --ok-bg:#123024;
+    --warn:#e3ab4f; --warn-bg:#2e2210;
+    --code-bg:#060a09; --code-ink:#cfe4dc;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 30px -14px rgba(0,0,0,.55);
+  }
+
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+    font-size:16px; line-height:1.6;
+  }
+  img{max-width:100%;}
+  [hidden]{display:none!important;}
+  .wrap{max-width:920px; margin:0 auto; padding:52px 20px 100px; padding-inline:20px;}
+  h1,h2,h3,h4{font-family:'IBM Plex Sans', system-ui, sans-serif; text-wrap:balance; margin:0;}
+  code, .mono, .tag, table td.num{font-family:'IBM Plex Mono', 'SFMono-Regular', monospace;}
+  p{max-width:70ch;}
+
+  /* ---- hero ---- */
+  header.hero{display:flex; flex-direction:column; gap:16px; margin-bottom:20px;}
+  .eyebrow{
+    font-family:'IBM Plex Mono', monospace; font-size:12.5px; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--accent); font-weight:600;
+  }
+  h1{font-size:clamp(30px,5vw,42px); font-weight:700; letter-spacing:-.01em;}
+  .pitch{color:var(--muted); font-size:16.5px; max-width:66ch;}
+  .pitch b{color:var(--ink); font-weight:600;}
+
+  .verdicts{display:flex; flex-wrap:wrap; gap:10px; margin-top:6px;}
+  .chip{
+    display:inline-flex; align-items:center; gap:8px;
+    border:1px solid var(--border); background:var(--surface);
+    border-radius:999px; padding:7px 14px 7px 10px; box-shadow:var(--shadow);
+    font-size:13.5px;
+  }
+  .chip .dot{width:8px; height:8px; border-radius:50%; background:var(--ok); flex:none;}
+  .chip.warn .dot{background:var(--warn);}
+  .chip b{font-weight:600;}
+  .chip .n{color:var(--muted); font-size:12.5px;}
+
+  .meta-row{display:flex; flex-wrap:wrap; gap:18px; color:var(--muted); font-size:13px; font-family:'IBM Plex Mono',monospace; margin-top:4px;}
+
+  /* ---- sections ---- */
+  section.part{margin-top:58px;}
+  .part-head{display:flex; align-items:baseline; gap:12px; margin-bottom:6px; border-bottom:2px solid var(--accent); padding-bottom:12px;}
+  .part-num{font-family:'IBM Plex Mono',monospace; color:var(--accent); font-weight:600; font-size:14px;}
+  .part-head h2{font-size:23px; font-weight:700;}
+  .part-intro{color:var(--muted); font-size:15px; margin:12px 0 26px; max-width:68ch;}
+
+  h3.claim{font-size:16.5px; font-weight:600; margin:32px 0 4px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+  p.claim-note{color:var(--muted); font-size:14px; margin:0 0 14px; max-width:68ch;}
+
+  .pass{
+    display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600;
+    padding:3px 9px; border-radius:6px; background:var(--ok-bg); color:var(--ok);
+    font-family:'IBM Plex Mono',monospace; letter-spacing:.02em;
+  }
+  .pass::before{content:"✓"; font-weight:700;}
+  .flag{
+    display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600;
+    padding:3px 9px; border-radius:6px; background:var(--warn-bg); color:var(--warn);
+    font-family:'IBM Plex Mono',monospace; letter-spacing:.02em;
+  }
+  .flag::before{content:"!"; font-weight:700;}
+
+  /* ---- figure / diagram ---- */
+  figure.diagram{
+    margin:20px 0 8px; border:1px solid var(--border); border-radius:12px;
+    background:var(--surface); box-shadow:var(--shadow); padding:22px 22px 16px;
+  }
+  figure.diagram svg{width:100%; height:auto; display:block; color:var(--ink);}
+  figure.diagram figcaption{font-size:13px; color:var(--muted); margin-top:10px; text-align:center;}
+  .accent-line{stroke:var(--accent);}
+  .accent-fill{fill:var(--accent);}
+  .soft-fill{fill:var(--accent-soft);}
+
+  /* ---- evidence blocks ---- */
+  .evidence{
+    border:1px solid var(--border); border-radius:10px; background:var(--surface);
+    box-shadow:var(--shadow); overflow:hidden; margin:10px 0 18px;
+  }
+  .evidence .src{
+    display:flex; justify-content:space-between; align-items:center;
+    padding:8px 14px; background:var(--surface-2); border-bottom:1px solid var(--border);
+    font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--muted);
+    letter-spacing:.03em; text-transform:uppercase;
+  }
+  .evidence pre{
+    margin:0; padding:14px 16px; background:var(--code-bg); color:var(--code-ink);
+    font-family:'IBM Plex Mono',monospace; font-size:12.6px; line-height:1.6;
+    overflow-x:auto; white-space:pre;
+  }
+  .evidence pre .g{color:#7fd9a8;}
+  .evidence pre .m{color:#e3ab4f;}
+  .evidence pre .c{color:#6fb3c9;}
+  .evidence pre .d{color:#7a8b86;}
+
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:16px;}
+  @media (max-width:640px){.grid2{grid-template-columns:1fr;}}
+
+  table{width:100%; border-collapse:collapse; font-size:13.5px; margin:14px 0;}
+  table.data{border:1px solid var(--border); border-radius:10px; overflow:hidden; background:var(--surface); box-shadow:var(--shadow); display:block; overflow-x:auto;}
+  table.data table, table.data{display:table;}
+  th,td{padding:9px 12px; text-align:left; border-bottom:1px solid var(--border);}
+  thead th{background:var(--surface-2); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted);}
+  tbody tr:last-child td{border-bottom:none;}
+  td.num{font-variant-numeric:tabular-nums; text-align:right;}
+
+  .chart-card{border:1px solid var(--border); border-radius:10px; background:var(--surface); box-shadow:var(--shadow); padding:18px 18px 8px; margin:14px 0 22px;}
+  .chart-card h4{font-size:13.5px; font-weight:600; margin:0 0 2px;}
+  .chart-card .cap{color:var(--muted); font-size:12.5px; margin-bottom:10px;}
+  svg.chart{width:100%; height:auto; display:block; overflow:visible;}
+  .axis-label{font-family:'IBM Plex Mono',monospace; font-size:10px; fill:var(--muted);}
+  .band-label{font-family:'IBM Plex Mono',monospace; font-size:10.5px; fill:var(--warn); font-weight:600;}
+
+  .try-box{
+    border:1px solid var(--border); border-radius:10px; background:var(--accent-soft);
+    padding:18px 20px; margin:24px 0;
+  }
+  .try-box h4{font-size:14px; font-weight:700; color:var(--accent); margin-bottom:8px; text-transform:uppercase; letter-spacing:.03em; font-family:'IBM Plex Mono',monospace;}
+  .try-box ol{margin:0; padding-left:22px; font-size:14.5px;}
+  .try-box li{margin-bottom:6px;}
+
+  footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--border); color:var(--muted); font-size:12.5px; display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; font-family:'IBM Plex Mono',monospace;}
+
+  ::selection{background:var(--accent); color:var(--accent-ink);}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header class="hero">
+    <div class="eyebrow">Implementation Report · Hackathon Reference</div>
+    <h1>Two OpenShift clusters, one wire that can't go down.</h1>
+    <p class="pitch">
+      Substations, rail signalling, and grid control systems need a network that survives a single
+      cable failure with <b>zero</b> lost packets - not a fast failover, an <b>invisible</b> one. That's
+      what Parallel Redundancy Protocol (IEC 62439-3) is for: every frame goes out two independent
+      paths at once, and the receiver just uses whichever copy arrives first. This report walks through
+      building and proving that link between two independent single-node OpenShift clusters on KVM,
+      including a real installer bug we found along the way and how we worked around it.
+    </p>
+    <div class="verdicts">
+      <span class="chip"><span class="dot"></span><b>sno-a / sno-b</b><span class="n">OCP 5.0.0-rc.2 · Available</span></span>
+      <span class="chip"><span class="dot"></span><b>PRP failover</b><span class="n">0% loss, 97/97 pkts</span></span>
+      <span class="chip"><span class="dot"></span><b>3 NICs/node</b><span class="n">1 API + 2 PRP, nothing shared</span></span>
+      <span class="chip warn"><span class="dot"></span><b>Day-0 install</b><span class="n">installer bug on 2 OCP versions - Day-2 fix works</span></span>
+    </div>
+    <div class="meta-row">
+      <span>HOST hpe-ml350gen9-01.khw.eng.rdu2.dc.redhat.com</span>
+      <span>DATE 2026-09-15</span>
+      <span>OCP 5.0.0-rc.2</span>
+    </div>
+  </header>
+
+  <!-- ============ ARCHITECTURE ============ -->
+  <section class="part">
+    <div class="part-head">
+      <span class="part-num">01</span>
+      <h2>The mechanism</h2>
+    </div>
+    <p class="part-intro">
+      Each node gets exactly 3 NICs - one dedicated port per role, nothing doubled up. One carries
+      normal cluster traffic; the other two are each a leg of the PRP link. The two PRP networks are
+      otherwise unreachable from anywhere - no DHCP, no routing, no host IP - which is what keeps this
+      a clean redundancy test instead of an accidental extra route into the cluster.
+    </p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 900 380" role="img" aria-label="sno-a and sno-b each run a virtual prp0 interface binding two physical NICs; every frame prp0 sends leaves on both prp-lan-a and prp-lan-b simultaneously, so losing either path loses zero frames.">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 Z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <!-- ocp-public cloud -->
+        <rect x="350" y="18" width="200" height="54" rx="10" class="soft-fill" stroke="currentColor" stroke-width="1.5"/>
+        <text x="450" y="40" text-anchor="middle" font-size="13" font-weight="600" fill="currentColor">ocp-public (NAT)</text>
+        <text x="450" y="58" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.65">API · Ingress · egress</text>
+
+        <!-- sno-a node -->
+        <rect x="40" y="150" width="220" height="120" rx="10" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="150" y="176" text-anchor="middle" font-size="15" font-weight="700" fill="currentColor">sno-a</text>
+        <text x="150" y="192" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.65">8 vCPU / 16GB</text>
+        <rect x="60" y="206" width="180" height="46" rx="7" fill="none" stroke="currentColor" stroke-width="1.25" stroke-dasharray="3,3"/>
+        <text x="150" y="224" text-anchor="middle" font-size="11.5" font-weight="600" fill="currentColor">prp0</text>
+        <text x="150" y="240" text-anchor="middle" font-size="9.5" fill="currentColor" opacity="0.7">hsr(eth1, eth2) · proto=prp</text>
+
+        <!-- sno-b node -->
+        <rect x="640" y="150" width="220" height="120" rx="10" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="750" y="176" text-anchor="middle" font-size="15" font-weight="700" fill="currentColor">sno-b</text>
+        <text x="750" y="192" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.65">8 vCPU / 16GB</text>
+        <rect x="660" y="206" width="180" height="46" rx="7" fill="none" stroke="currentColor" stroke-width="1.25" stroke-dasharray="3,3"/>
+        <text x="750" y="224" text-anchor="middle" font-size="11.5" font-weight="600" fill="currentColor">prp0</text>
+        <text x="750" y="240" text-anchor="middle" font-size="9.5" fill="currentColor" opacity="0.7">hsr(eth1, eth2) · proto=prp</text>
+
+        <!-- eth0 links up to ocp-public -->
+        <line x1="150" y1="150" x2="400" y2="72" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow)"/>
+        <text x="235" y="102" font-size="10.5" fill="currentColor">eth0</text>
+        <line x1="750" y1="150" x2="500" y2="72" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow)"/>
+        <text x="655" y="102" font-size="10.5" fill="currentColor">eth0</text>
+
+        <!-- prp-lan-a (top path) -->
+        <line x1="260" y1="220" x2="640" y2="220" class="accent-line" stroke-width="2.5"/>
+        <text x="450" y="210" text-anchor="middle" font-size="11.5" font-weight="600" class="accent-line" fill="var(--accent)">prp-lan-a (isolated)</text>
+        <text x="450" y="233" text-anchor="middle" font-size="9.5" fill="currentColor" opacity="0.65">frame copy 1, every time</text>
+
+        <!-- prp-lan-b (bottom path) -->
+        <line x1="260" y1="290" x2="640" y2="290" class="accent-line" stroke-width="2.5"/>
+        <text x="450" y="308" text-anchor="middle" font-size="11.5" font-weight="600" class="accent-line" fill="var(--accent)">prp-lan-b (isolated)</text>
+        <text x="450" y="278" text-anchor="middle" font-size="9.5" fill="currentColor" opacity="0.65">frame copy 2, every time</text>
+
+        <!-- connectors from prp0 boxes to the two lines -->
+        <line x1="130" y1="252" x2="130" y2="220" stroke="currentColor" stroke-width="1.25"/>
+        <line x1="130" y1="220" x2="260" y2="220" stroke="currentColor" stroke-width="1.25"/>
+        <line x1="170" y1="252" x2="170" y2="290" stroke="currentColor" stroke-width="1.25"/>
+        <line x1="170" y1="290" x2="260" y2="290" stroke="currentColor" stroke-width="1.25"/>
+        <line x1="770" y1="252" x2="770" y2="220" stroke="currentColor" stroke-width="1.25"/>
+        <line x1="770" y1="220" x2="640" y2="220" stroke="currentColor" stroke-width="1.25"/>
+        <line x1="730" y1="252" x2="730" y2="290" stroke="currentColor" stroke-width="1.25"/>
+        <line x1="730" y1="290" x2="640" y2="290" stroke="currentColor" stroke-width="1.25"/>
+
+        <!-- failure mark -->
+        <g transform="translate(355,220)">
+          <circle r="11" fill="var(--warn-bg)" stroke="var(--warn)" stroke-width="1.5"/>
+          <text text-anchor="middle" dy="4" font-size="13" font-weight="700" fill="var(--warn)">×</text>
+        </g>
+        <text x="355" y="245" text-anchor="middle" font-size="9.5" font-weight="600" fill="var(--warn)">cut here → still 0% loss</text>
+      </svg>
+      <figcaption>Every frame prp0 sends leaves on both prp-lan-a and prp-lan-b at once. Cutting either path (as tested, live, below) drops zero frames - the receiver was never waiting on that copy.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============ THE BUG ============ -->
+  <section class="part">
+    <div class="part-head">
+      <span class="part-num">02</span>
+      <h2>The installer bug (and why it took two attempts to isolate)</h2>
+    </div>
+    <p class="part-intro">
+      The Day-0 network config for <span class="mono">prp0</span> is written once, in standard NMState
+      YAML, and it is <b>correct</b> - it validates cleanly against the reference <span class="mono">nmstatectl</span>.
+      It still doesn't work at first boot, on either OpenShift version we tried it on.
+    </p>
+
+    <h3 class="claim">Attempt 1: schema-valid, but rejected for a real reason <span class="pass">learned something</span></h3>
+    <p class="claim-note">
+      Giving the two PRP ports different MAC addresses seemed natural - they're different physical NICs.
+      nmstate disagreed, and it was right to:
+    </p>
+    <div class="evidence">
+      <div class="src"><span>build-time validation → nmstatectl gc</span></div>
+      <pre>NmstateError: <span class="m">InvalidArgument: HSR ports on interface prp0 cannot have different MAC addresses</span></pre>
+    </div>
+    <p class="claim-note">
+      <span class="mono">prp0</span> is one logical identity presented out two ports - both have to answer
+      to the same MAC. Fix: keep each vNIC's real hardware MAC unique (needed elsewhere, for udev-based
+      interface renaming), and set a shared, made-up <em>operational</em> MAC only inside the nmstate
+      config for those two ports. NetworkManager reprograms the MAC at bring-up time; this part works.
+    </p>
+
+    <h3 class="claim">Attempt 2: valid config, broken translator <span class="flag">real installer bug</span></h3>
+    <p class="claim-note">
+      With that fixed, the config validates and builds an ISO without complaint. The node boots,
+      <span class="mono">eth1</span>/<span class="mono">eth2</span> come up correctly with the shared MAC
+      applied - and <span class="mono">prp0</span> simply isn't there.
+    </p>
+    <div class="grid2">
+      <div class="evidence">
+        <div class="src"><span>live shell → device doesn't exist</span></div>
+        <pre>$ ip -d link show prp0
+<span class="m">Device "prp0" does not exist.</span></pre>
+      </div>
+      <div class="evidence">
+        <div class="src"><span>journalctl → NetworkManager's own complaint</span></div>
+        <pre>keyfile: load: ".../prp0.nmconnection":
+  <span class="m">invalid connection: hsr:
+  setting required for
+  connection of type 'hsr'</span></pre>
+      </div>
+    </div>
+    <p class="claim-note">
+      The generated file has <span class="mono">type=hsr</span> but no <span class="mono">[hsr]</span>
+      section at all. <span class="mono">openshift-install</span> embeds its own nmstate-to-NetworkManager
+      translator, older and different from the one that validated the config, and it silently drops every
+      HSR-specific field. <b>Confirmed identically on OCP 4.19.45 and 5.0.0-rc.2</b> - a real gap between
+      the validator and the serializer, not something fixable by editing the YAML further.
+    </p>
+  </section>
+
+  <!-- ============ THE FIX ============ -->
+  <section class="part">
+    <div class="part-head">
+      <span class="part-num">03</span>
+      <h2>The fix: kubernetes-nmstate-operator, Day 2</h2>
+    </div>
+    <p class="part-intro">
+      The operator's handler runs the <b>real</b> <span class="mono">nmstatectl</span> directly on the
+      node via a privileged pod - a completely different code path from the broken Day-0 serializer -
+      and produces a correct keyfile every time.
+    </p>
+
+    <h3 class="claim">One extra wrinkle on 5.0.0-rc.2 <span class="flag">catalog gap, not our bug</span></h3>
+    <p class="claim-note">
+      <span class="mono">kubernetes-nmstate-operator</span> isn't in any of 5.0.0-rc.2's default catalogs
+      yet - checked all three, all healthy, 85-261 packages each, the operator in none of them. Likely a
+      pre-GA gap (5.0 jumped to Kubernetes v1.36; not everything's rebuilt against it yet). Workaround:
+      point a second <span class="mono">CatalogSource</span> at the last 4.x index (<span class="mono">v4.22</span>),
+      which still carries it - OLM on 5.0 resolves and installs it from there without complaint.
+    </p>
+    <div class="evidence">
+      <div class="src"><span>live shell → operator install, from the 4.22 index</span></div>
+      <pre>$ oc get csv -n openshift-nmstate
+NAME                                              VERSION               PHASE
+kubernetes-nmstate-operator.4.22.0-202609090959   4.22.0-202609090959   <span class="g">Succeeded</span>
+
+$ oc apply -f day2-manifests/03-nncp-sno-a.yaml
+$ oc get nncp prp0-hsr
+NAME       STATUS      REASON
+prp0-hsr   <span class="g">Available</span>   SuccessfullyConfigured</pre>
+    </div>
+
+    <div class="try-box">
+      <h4>Try it yourself</h4>
+      <ol>
+        <li>Deploy: <span class="mono">ansible-playbook sno_playbook.yml</span> (builds both VMs, boots them)</li>
+        <li>Wait: <span class="mono">openshift-install agent wait-for install-complete --dir=&lt;install_dir&gt;</span></li>
+        <li>Per cluster: <span class="mono">oc apply -f day2-manifests/*.yaml</span> in numeric order, waiting for each CSV/DaemonSet before the next file</li>
+        <li>Verify: <span class="mono">ip -d link show prp0</span> should show <span class="mono">proto 1</span> on both nodes</li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- ============ PROOF ============ -->
+  <section class="part">
+    <div class="part-head">
+      <span class="part-num">04</span>
+      <h2>The proof: cut a wire, lose nothing</h2>
+    </div>
+    <p class="part-intro">
+      Tested at the hypervisor level - an administrative link-down on the vNIC, closer to an unplugged
+      cable than a software toggle - while a continuous ping ran between the two nodes' <span class="mono">prp0</span> addresses.
+    </p>
+
+    <div class="chart-card">
+      <h4>Round-trip time across the outage window</h4>
+      <div class="cap">97 pings, 20s window · shaded band = prp-lan-a down (icmp_seq 16-55) · no gap in the line = no lost packet</div>
+      <svg class="chart" viewBox="0 0 820 220" id="rttChart" role="img" aria-label="RTT stays flat under 1ms through the entire outage window, with no gaps"></svg>
+    </div>
+
+    <div class="evidence">
+      <div class="src"><span>live shell → ping statistics, full run</span></div>
+      <pre>--- 10.10.10.2 ping statistics ---
+<span class="g">97 packets transmitted, 97 received, 0% packet loss</span>, time 19923ms
+rtt min/avg/max/mdev = 0.439/0.560/0.800/0.063 ms</pre>
+    </div>
+
+    <h3 class="claim">Independently re-confirmed, twice, by tools that don't trust the shell history</h3>
+    <p class="claim-note">
+      Everything above is from live commands. Both clusters were also re-checked with a fresh
+      <span class="mono">sos report</span> (host) and <span class="mono">oc adm must-gather</span> (each
+      cluster) - separate tools, walking their own code paths, run after the fact.
+    </p>
+    <table class="data">
+      <thead><tr><th>Check</th><th>sno-a</th><th>sno-b</th><th>Source</th></tr></thead>
+      <tbody>
+        <tr><td>ClusterVersion Available</td><td class="num">True</td><td class="num">True</td><td>must-gather (independent)</td></tr>
+        <tr><td>Degraded operators</td><td class="num">0 / 34</td><td class="num">0 / 34</td><td>must-gather (independent)</td></tr>
+        <tr><td>Node Ready, kubelet v1.36.3</td><td class="num">True</td><td class="num">True</td><td>must-gather (independent)</td></tr>
+        <tr><td>3 NICs, correct networks</td><td class="num">✓</td><td class="num">✓</td><td>sos report (independent)</td></tr>
+        <tr><td>SELinux enforcing on both VMs</td><td class="num">✓</td><td class="num">✓</td><td>sos report (independent)</td></tr>
+        <tr><td>prp0: proto 1 (PRP, not HSR)</td><td class="num">✓</td><td class="num">✓</td><td>live shell</td></tr>
+        <tr><td>Single-path failure, mid-traffic</td><td class="num" colspan="2" style="text-align:center">0% loss</td><td>live shell (virsh domif-setlink)</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <p style="color:var(--muted); font-size:13.5px; margin-top:40px;">
+    Full playbook, templates, and manifests: repo <span class="mono">ocp-abi-local-sno</span>
+    (<span class="mono">day2-manifests/</span> for the operator+NNCP fix, <span class="mono">docs/</span>
+    for the complete writeup this report summarizes). Raw evidence bundles on the KVM host:
+    <span class="mono">/root/evidence-5.0rc2/</span>.
+  </p>
+
+  <footer>
+    <span>ocp-abi-local-sno · PRP over dual SNO</span>
+    <span>Generated 2026-09-15 · OCP 5.0.0-rc.2 · sos-4.11.2</span>
+  </footer>
+</div>
+
+<script>
+(function(){
+  var rtts = [0.470,0.504,0.522,0.601,0.706,0.513,0.676,0.577,0.555,0.581,
+    0.640,0.541,0.579,0.461,0.485,0.542,0.602,0.534,0.593,0.653,
+    0.526,0.585,0.607,0.469,0.646,0.592,0.622,0.588,0.619,0.531,
+    0.528,0.588,0.611,0.800,0.579,0.501,0.575,0.530,0.611,0.542,
+    0.581,0.586,0.560,0.681,0.490,0.614,0.478,0.482,0.564,0.607,
+    0.601,0.526,0.498,0.552,0.578,0.581,0.482,0.661,0.544,0.594,
+    0.471,0.439,0.487,0.531,0.646,0.586,0.453,0.607,0.476,0.590,
+    0.505,0.492,0.475,0.480,0.575,0.602,0.597,0.498,0.576,0.510,
+    0.557,0.455,0.609,0.527,0.606,0.538,0.593,0.612,0.456,0.577,
+    0.625,0.579,0.474,0.621,0.598,0.544,0.585];
+
+  var svg = document.getElementById('rttChart');
+  var W = 820, H = 220, padL = 40, padR = 16, padT = 16, padB = 26;
+  var plotW = W - padL - padR, plotH = H - padT - padB;
+  var n = rtts.length;
+  var yMax = 1.0;
+  var rootAttr = document.documentElement.getAttribute('data-theme');
+  var isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  var dark = rootAttr === 'dark' || (rootAttr !== 'light' && isDark);
+  var muted = dark ? '#8ba39c' : '#55635f';
+  var accent = dark ? '#2dd4bf' : '#0f766e';
+  var warnFill = dark ? 'rgba(227,171,79,.16)' : 'rgba(161,92,0,.10)';
+  var grid = dark ? '#20302b' : '#dbe2de';
+
+  function x(i){ return padL + (i/(n-1)) * plotW; }
+  function y(v){ return padT + plotH - (Math.min(v,yMax)/yMax) * plotH; }
+
+  var outageStart = 15, outageEnd = 55;
+
+  var parts = [];
+  [0,0.25,0.5,0.75,1.0].forEach(function(v){
+    var yy = y(v);
+    parts.push('<line x1="'+padL+'" y1="'+yy+'" x2="'+(W-padR)+'" y2="'+yy+'" stroke="'+grid+'" stroke-width="1"/>');
+    parts.push('<text class="axis-label" x="'+(padL-8)+'" y="'+(yy+3)+'" text-anchor="end" fill="'+muted+'">'+v.toFixed(2)+'</text>');
+  });
+  parts.push('<text class="axis-label" x="10" y="'+(padT+2)+'" fill="'+muted+'">ms</text>');
+
+  parts.push('<rect x="'+x(outageStart)+'" y="'+padT+'" width="'+(x(outageEnd)-x(outageStart))+'" height="'+plotH+'" fill="'+warnFill+'"/>');
+  parts.push('<text class="band-label" x="'+((x(outageStart)+x(outageEnd))/2)+'" y="'+(padT+14)+'" text-anchor="middle">prp-lan-a down</text>');
+
+  var pts = rtts.map(function(v,i){ return x(i).toFixed(1)+','+y(v).toFixed(1); }).join(' ');
+  parts.push('<polyline points="'+pts+'" fill="none" stroke="'+accent+'" stroke-width="1.75" stroke-linejoin="round" stroke-linecap="round"/>');
+
+  [0,24,48,72,96].forEach(function(i){
+    parts.push('<text class="axis-label" x="'+x(i)+'" y="'+(H-8)+'" text-anchor="middle" fill="'+muted+'">seq '+(i+1)+'</text>');
+  });
+
+  svg.innerHTML = parts.join('');
+})();
+</script>
+</body>
+</html>
