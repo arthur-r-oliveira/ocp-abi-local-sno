@@ -138,5 +138,22 @@ if [ -n "${mac:-}" ] && [ -f "$ping_log" ]; then
 fi
 echo
 
+# --- 5. Kernel-level PRP node table shows the peer (per Red Hat's KB on
+#        configuring HSR/PRP with nmstate - not just IP-level reachability) --
+for pair in "sno-a:$NODE_A_IP:$PRP_B_IP" "sno-b:$NODE_B_IP:$PRP_A_IP"; do
+  name="${pair%%:*}"; rest="${pair#*:}"
+  ip="${rest%%:*}"; peer_ip="${rest#*:}"
+  table=$(ssh "${SSH_OPTS[@]}" "$SSH_USER@$ip" "sudo cat /sys/kernel/debug/hsr/prp0/node_table 2>/dev/null")
+  # node_table rows list the PEER's MAC, not an IP - just confirm the
+  # table has at least one real (non-header) entry.
+  entries=$(echo "$table" | grep -c '^[0-9a-f][0-9a-f]:')
+  if [ "${entries:-0}" -ge 1 ]; then
+    record PASS "prp-node-table:$name" "$entries peer entr$([ "$entries" = 1 ] && echo y || echo ies) in /sys/kernel/debug/hsr/prp0/node_table"
+  else
+    record FAIL "prp-node-table:$name" "no peer registered at the HSR/PRP protocol level (debugfs table empty)"
+  fi
+done
+echo
+
 echo "== Summary: $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]

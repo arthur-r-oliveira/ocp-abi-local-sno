@@ -1,0 +1,24 @@
+# The hsr kernel module autoloads on demand today (it has an
+# rtnl-link-hsr alias, the same mechanism bonding/vlan/bridge use), and
+# we've verified that surviving a real reboot - but Red Hat's own KB on
+# configuring HSR/PRP with nmstate explicitly recommends persisting this
+# via /etc/modules-load.d/ instead of relying on it, so this closes that
+# gap rather than leaving it to implicit kernel behavior. Applies to
+# both sno-a and sno-b - not node-specific, so one file, one label.
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  name: 99-hsr-module-autoload
+  labels:
+    machineconfiguration.openshift.io/role: master
+spec:
+  config:
+    ignition:
+      version: 3.2.0
+    storage:
+      files:
+        - path: /etc/modules-load.d/hsr.conf
+          mode: 0644
+          overwrite: true
+          contents:
+            source: data:;base64,aHNy

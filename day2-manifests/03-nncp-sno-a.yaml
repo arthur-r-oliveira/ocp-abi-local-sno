@@ -4,6 +4,17 @@
 # confirm with `ssh core@<node> ip -br link` first; on this environment
 # they came up as enp6s0/enp7s0, but predictable naming depends on PCI
 # slot allocation and is not guaranteed identical across hosts.
+#
+# copy-mac-from matches Red Hat's KB on configuring HSR/PRP with nmstate
+# (RHEL 9.8+/10.2+ GA) - it gives prp0 and both ports one consistent MAC,
+# and is the current recommended replacement for manually hardcoding an
+# identical mac-address on both port interfaces. Tested working here with
+# nmstatectl 2.2.60 on RHCOS's RHEL 10.2 base (see docs/prp-test-case.md
+# for the full comparison against that KB, including a caveat: Red Hat's
+# own internal notes on the KB flag open issues with copy-mac-from alone
+# in some configurations - if this ever regresses, the fallback is
+# setting mac-address explicitly on port1 and port2 in NMState, as this
+# repo did on OCP 4.19/5.0.0-rc.2 before this field was adopted).
 apiVersion: nmstate.io/v1
 kind: NodeNetworkConfigurationPolicy
 metadata:
@@ -16,6 +27,7 @@ spec:
       - name: prp0
         type: hsr
         state: up
+        copy-mac-from: enp6s0
         hsr:
           port1: enp6s0
           port2: enp7s0

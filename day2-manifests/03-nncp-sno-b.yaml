@@ -1,5 +1,6 @@
 # Apply against sno-b's own kubeconfig. See the note in
-# 03-nncp-sno-a.yaml about confirming port1/port2's kernel names.
+# 03-nncp-sno-a.yaml about confirming port1/port2's kernel names and
+# about copy-mac-from.
 apiVersion: nmstate.io/v1
 kind: NodeNetworkConfigurationPolicy
 metadata:
@@ -12,6 +13,7 @@ spec:
       - name: prp0
         type: hsr
         state: up
+        copy-mac-from: enp6s0
         hsr:
           port1: enp6s0
           port2: enp7s0

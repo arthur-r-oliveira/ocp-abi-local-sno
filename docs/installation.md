@@ -219,5 +219,8 @@ oc apply -f day2-manifests/01-nmstate-operator-subscription.yaml
 oc apply -f day2-manifests/02-nmstate-cr.yaml
 # wait for: oc get pods -n openshift-nmstate  ->  nmstate-handler Running
 oc apply -f day2-manifests/03-nncp-sno-a.yaml   # or 03-nncp-sno-b.yaml
+oc apply -f day2-manifests/04-hsr-module-autoload.yaml
 ```
-This is not yet wired into the playbook to apply automatically.
+This is not yet wired into the playbook to apply automatically. See
+`docs/prp-test-case.md` for a full point-by-point comparison against
+Red Hat's official KB on configuring HSR/PRP with nmstate.
