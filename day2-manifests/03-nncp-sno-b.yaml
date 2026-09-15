@@ -1,0 +1,27 @@
+# Apply against sno-b's own kubeconfig. See the note in
+# 03-nncp-sno-a.yaml about confirming port1/port2's kernel names.
+apiVersion: nmstate.io/v1
+kind: NodeNetworkConfigurationPolicy
+metadata:
+  name: prp0-hsr
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: sno-b.apps.lab.corp
+  desiredState:
+    interfaces:
+      - name: prp0
+        type: hsr
+        state: up
+        hsr:
+          port1: enp6s0
+          port2: enp7s0
+          multicast-spec: 0
+          protocol: prp
+        ipv4:
+          enabled: true
+          dhcp: false
+          address:
+            - ip: 10.10.10.2
+              prefix-length: 24
+        ipv6:
+          enabled: false

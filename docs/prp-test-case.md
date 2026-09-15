@@ -9,9 +9,11 @@ the loss of either individual path with zero packet loss.
 
 ## Topology
 
-Both nodes' `eth2`/`eth3` land on the same two isolated libvirt networks:
+Both nodes' `eth1`/`eth2` (each on its own dedicated NIC - `eth0` alone
+carries br-ex/API/Ingress/egress) land on the same two isolated libvirt
+networks:
 
-| Node   | eth2 (`prp-lan-a`) | eth3 (`prp-lan-b`) | `prp0` IP    |
+| Node   | eth1 (`prp-lan-a`) | eth2 (`prp-lan-b`) | `prp0` IP    |
 |--------|--------------------|--------------------|--------------|
 | sno-a  | 10.10.10.0/24 segment A | segment B | 10.10.10.1/24 |
 | sno-b  | segment A | segment B | 10.10.10.2/24 |
@@ -20,9 +22,9 @@ Both nodes' `eth2`/`eth3` land on the same two isolated libvirt networks:
 `protocol=prp`) binding both physical ports into one logical redundant
 interface: every frame `prp0` sends goes out **both** ports simultaneously;
 duplicates arriving from either path are suppressed on receive.
-`eth2`/`eth3` carry no IP of their own - only `prp0` does.
+`eth1`/`eth2` carry no IP of their own - only `prp0` does.
 
-## Root cause: why this needs a manual/Day-2 fix at all
+## Root cause: the Day-0 installer bug (confirmed on TWO OCP versions)
 
 The agent-based installer's Day-0 NMState config (`agent-config.yaml`,
 generated from `templates/agent-config.yaml.j2`) declares `prp0` correctly:
@@ -32,19 +34,20 @@ generated from `templates/agent-config.yaml.j2`) declares `prp0` correctly:
   type: hsr
   state: up
   hsr:
-    port1: eth2
-    port2: eth3
+    port1: eth1
+    port2: eth2
     multicast-spec: 0
     protocol: prp
 ```
 
 This **validates successfully** at ISO-build time (`nmstatectl gc` on the
 build host, nmstate 2.2.60, accepts the schema and even correctly rejects a
-first, wrong attempt at the config - see below). But OCP 4.19.45's
-`openshift-install` embeds its own, different, older nmstate-to-
-NetworkManager-keyfile translator, and **that** translator silently drops
-every HSR-specific field. The resulting on-disk connection profile has
-`type=hsr` but no `[hsr]` section at all:
+first, wrong attempt at the config - see below). But `openshift-install`
+embeds its own, different, older nmstate-to-NetworkManager-keyfile
+translator, and **that** translator silently drops every HSR-specific
+field. Confirmed identically on **both OCP 4.19.45 and 5.0.0-rc.2** - the
+resulting on-disk connection profile has `type=hsr` but no `[hsr]` section
+at all:
 
 ```
 [connection]
@@ -55,12 +58,12 @@ type=hsr
 ...
 ```
 
-NetworkManager then refuses to load it:
+NetworkManager then refuses to load it, on either version:
 ```
-NetworkManager[1853]: <warn> [...] keyfile: load: "/etc/NetworkManager/system-connections/prp0.nmconnection":
+NetworkManager[1857]: <warn> [...] keyfile: load: "/etc/NetworkManager/system-connections/prp0.nmconnection":
   failed to load connection: invalid connection: hsr: setting required for connection of type 'hsr'
 ```
-Net effect at first boot: `eth2`/`eth3` come up fine (including getting
+Net effect at first boot: `eth1`/`eth2` come up fine (including getting
 their shared operational MAC via nmstate's `mac-address` override, which
 *does* survive translation), but `prp0` simply doesn't exist:
 ```
@@ -71,11 +74,12 @@ Device "prp0" does not exist.
 This is a version-mismatch bug between the *validating* nmstate (correct,
 newer) and the *serializing* one embedded in the installer binary
 (older, drops fields it doesn't recognize) - not something fixable by
-changing the YAML schema further.
+changing the YAML schema further, and evidently not yet fixed as of this
+5.0 release candidate.
 
 ### An earlier wrong attempt, and what it taught us
 
-The first version of the NMState config gave `eth2` and `eth3` **different**
+The first version of the NMState config gave the two PRP ports **different**
 `mac-address` values (each interface's own real hardware MAC). That failed
 *validation* itself:
 ```
@@ -86,49 +90,92 @@ presented out two physical ports, so both ports must share one MAC. The
 fix is **not** to give the two vNICs the same hardware MAC in the libvirt
 domain XML (that broke the installer's separate MAC-based udev renaming
 map, which needs unique MACs per physical NIC to know which one is
-`eth2` vs `eth3`) - it's to keep the hardware MACs unique, and instead set
-`mac-address` in the *nmstate* config for `eth2`/`eth3` to one shared,
+`eth1` vs `eth2`) - it's to keep the hardware MACs unique, and instead set
+`mac-address` in the *nmstate* config for `eth1`/`eth2` to one shared,
 explicit, made-up value (`prp_mac_address` in `vars/main.yml`, distinct
 between `sno-a` and `sno-b`). nmstate/NetworkManager then reprogram the
 NIC's operational MAC to that shared value at bring-up time, on top of its
 distinct factory MAC. This part of the pipeline **does** survive the
-installer's translation and works correctly at first boot.
+installer's translation and works correctly at first boot, on both OCP
+versions.
 
-## Remediation
+## Remediation: kubernetes-nmstate-operator (Day-2)
 
-Rebuild the `prp0` connection with `nmcli`, which - on the guest's own
-NetworkManager (1.52+ here) - correctly supports HSR/PRP once given valid
-input; only the installer's *generator* is broken, not the guest's own NM:
+The durable fix is the `kubernetes-nmstate-operator` + a
+`NodeNetworkConfigurationPolicy` (NNCP) applied after `install-complete`.
+Its handler runs the **real** `nmstatectl` directly on the node via a
+privileged DaemonSet pod - a completely different code path from the
+installer's broken Day-0 serializer - and correctly produces a keyfile
+with a real `[hsr]` section.
 
-```bash
-ssh core@<node-ip> sudo bash -c '
-  nmcli connection delete prp0 2>/dev/null
-  nmcli connection add type hsr con-name prp0 ifname prp0 port1 eth2 port2 eth3
-  nmcli connection modify prp0 hsr.prp yes
-  nmcli connection modify prp0 ipv4.method manual ipv4.addresses <prp_ip>/24
-  nmcli connection modify prp0 ipv6.method disabled
-  nmcli connection down prp0; nmcli connection up prp0   # down/up, not just up - hsr.prp can otherwise not take effect
-  rm -f /etc/NetworkManager/system-connections/prp0-*.nmconnection  # avoid a duplicate-uuid stale file
-'
-```
-(substitute the real interface names if `net.ifnames` numbering differs -
-these nodes use `enp7s0`/`enp8s0`, not literally `eth2`/`eth3`, at the
-kernel level; the installer's udev rename map is what makes `eth2`/`eth3`
-usable in `agent-config.yaml` in the first place)
-
-This is **not durable** on its own - it's a live edit via SSH, not
-something MCO/ignition manages, so nothing reapplies it after certain
-resets. Lock it in with a `MachineConfig` (already in
-`extra-manifests/99-prp0-hsr-interface-<node>.yaml`, one per node since the
-IP/MAC/UUID differ):
+### Extra wrinkle on 5.0.0-rc.2: the operator isn't in the default catalog yet
 
 ```
-export KUBECONFIG=<install_dir>/auth/kubeconfig
-oc apply -f extra-manifests/99-prp0-hsr-interface-sno-a.yaml   # on sno-a's kubeconfig
-oc apply -f extra-manifests/99-prp0-hsr-interface-sno-b.yaml   # on sno-b's kubeconfig
+$ oc get packagemanifest -n openshift-marketplace | grep -i nmstate
+(no output)
 ```
-MCO will roll this out with **one reboot per node** (normal for any
-file-level MachineConfig) - expected, not a fault.
+Checked across all three default catalogs (`redhat-operators`,
+`certified-operators`, `community-operators`) - all three healthy, 85-261
+packages each, `kubernetes-nmstate-operator` in none of them. Confirmed via
+the subscription's own condition, not just an empty grep:
+```
+$ oc get subscription kubernetes-nmstate-operator -n openshift-nmstate -o jsonpath='{.status.conditions}'
+[{"reason":"ConstraintsNotSatisfiable","status":"True","type":"ResolutionFailed",
+  "message":"constraints not satisfiable: no operators found in package kubernetes-nmstate-operator
+             in the catalog referenced by subscription kubernetes-nmstate-operator, ..."},
+ {"reason":"AllCatalogSourcesHealthy","status":"False","type":"CatalogSourcesUnhealthy"}]
+```
+This is almost certainly a pre-GA catalog gap (OCP 5.0 jumped to Kubernetes
+v1.36; not every operator has been rebuilt/certified against it yet this
+early in the RC cycle), not a permanent removal.
+
+**Workaround** (`day2-manifests/00-nmstate-catalogsource.yaml`): point a
+second `CatalogSource` at the last 4.x index, `v4.22` -
+`registry.redhat.io/redhat/redhat-operator-index:v4.22` - which still
+carries the operator, and OLM on 5.0 resolves/installs it from there
+without complaint:
+```
+$ oc get packagemanifest -n openshift-marketplace -o json | \
+    python3 -c "... filter catalogSource==redhat-operators-4-22 ..."
+total packages from 4.22 index: 151      # includes kubernetes-nmstate-operator
+```
+```
+$ oc get csv -n openshift-nmstate
+NAME                                              VERSION               PHASE
+kubernetes-nmstate-operator.4.22.0-202609090959   4.22.0-202609090959   Succeeded
+```
+**A quirk while waiting**: the catalog pod's gRPC server needs a few
+restart cycles (3, here) before its `startupProbe` stops killing it -
+building the query cache from a fresh 1.5GB index the first time takes
+longer than the probe's patience, but the cache persists in the pod's
+`/tmp` across restarts and eventually wins:
+```
+Warning  Unhealthy  kubelet  Startup probe failed: timeout: failed to connect
+                              service "10.128.0.115:50051" within 5s: context deadline exceeded
+...
+$ oc get pods -n openshift-marketplace -l olm.catalogSource=redhat-operators-4-22
+NAME                          READY   STATUS    RESTARTS   AGE
+redhat-operators-4-22-pbt5w   1/1     Running   3          6m2s
+```
+Once `kubernetes-nmstate-operator` ships in OCP 5.0's own default catalog,
+delete this workaround `CatalogSource` and point the `Subscription` back
+at `redhat-operators`.
+
+### Applying the fix
+
+```
+oc apply -f day2-manifests/00-nmstate-catalogsource.yaml
+oc apply -f day2-manifests/01-nmstate-operator-subscription.yaml
+# wait: oc get csv -n openshift-nmstate -> Succeeded
+oc apply -f day2-manifests/02-nmstate-cr.yaml
+# wait: oc get pods -n openshift-nmstate -> nmstate-handler Running (1/1)
+oc apply -f day2-manifests/03-nncp-sno-a.yaml   # (or -sno-b.yaml, on that cluster)
+```
+```
+$ oc get nncp prp0-hsr
+NAME       STATUS      REASON
+prp0-hsr   Available   SuccessfullyConfigured
+```
 
 ## Verification
 
@@ -138,82 +185,87 @@ file-level MachineConfig) - expected, not a fault.
 $ ip -d link show prp0
 9: prp0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1494 qdisc noqueue state UP
     link/ether 52:54:00:aa:aa:01 brd ff:ff:ff:ff:ff:ff
-    hsr slave1 enp7s0 slave2 enp8s0 sequence 1800 supervision 01:15:4e:00:01:00 proto 1
+    hsr slave1 enp6s0 slave2 enp7s0 sequence 1800 supervision 01:15:4e:00:01:00 proto 1
 ```
-`proto 1` = PRP mode confirmed (not HSR/`proto 0` - `nmcli` will silently
-create the connection with `hsr.prp` still `no` unless you explicitly set
-it *and* cycle the connection down/up; check this every time).
+`proto 1` = PRP mode confirmed (not HSR/`proto 0`). Note: the kernel
+interface names ended up `enp6s0`/`enp7s0` on this 3-NIC layout - always
+confirm with `ip -br link` before writing the NNCP, predictable naming
+depends on PCI slot allocation.
 
 ### 2. Cross-node reachability
 
 ```
 $ ssh core@192.168.130.101 -- ping -c3 -W2 10.10.10.2
-PING 10.10.10.2 (10.10.10.2) 56(84) bytes of data.
-64 bytes from 10.10.10.2: icmp_seq=1 ttl=64 time=1022 ms   <- first packet: ARP/mac-table warm-up
-64 bytes from 10.10.10.2: icmp_seq=2 ttl=64 time=0.580 ms
-64 bytes from 10.10.10.2: icmp_seq=3 ttl=64 time=0.479 ms
+64 bytes from 10.10.10.2: icmp_seq=1 ttl=64 time=0.933 ms
+64 bytes from 10.10.10.2: icmp_seq=2 ttl=64 time=0.534 ms
+64 bytes from 10.10.10.2: icmp_seq=3 ttl=64 time=0.594 ms
 --- 10.10.10.2 ping statistics ---
 3 packets transmitted, 3 received, 0% packet loss
 ```
 
-### 3. Both paths are actually carrying traffic (not just one active link)
+### 3. Failover test: kill one path mid-traffic, confirm zero loss
 
-Packet counters on the two slave ports should be **identical** - PRP
-duplicates every frame onto both paths, it doesn't merely fail over:
-```
-$ ip -s link show enp7s0   (prp-lan-a)          $ ip -s link show enp8s0   (prp-lan-b)
-RX: 3392 bytes 48 packets                       RX: 3392 bytes 48 packets
-TX: 6660 bytes 82 packets                        TX: 6660 bytes 82 packets
-```
-
-### 4. Failover test: kill one path mid-traffic, confirm zero loss
-
-This is the actual point of PRP, so test it at the hypervisor level (an
-administrative link-down on the libvirt vNIC, not a guest-side toggle -
-closer to an unplugged cable than a software reconfiguration):
+Tested at the hypervisor level (an administrative link-down on the libvirt
+vNIC, not a guest-side toggle - closer to an unplugged cable than a
+software reconfiguration):
 
 ```bash
-# Find the vNIC MAC for prp-lan-a on the target node
 virsh domiflist sno-a | grep prp-lan-a
-#  vnet26   network   prp-lan-a   virtio   52:54:00:1a:9d:cd
+#  vnet33   network   prp-lan-a   virtio   52:54:00:d8:47:f0
 
-# Start a continuous ping, then cut/restore mid-stream
 ssh core@192.168.130.101 'ping -i 0.2 -w 20 10.10.10.2' > /tmp/prp_failover.log 2>&1 &
 sleep 3
-virsh domif-setlink sno-a 52:54:00:1a:9d:cd down    # cut prp-lan-a
+virsh domif-setlink sno-a 52:54:00:d8:47:f0 down    # cut prp-lan-a
 sleep 8
-virsh domif-setlink sno-a 52:54:00:1a:9d:cd up      # restore it
+virsh domif-setlink sno-a 52:54:00:d8:47:f0 up      # restore it
 wait
 ```
 
-**Actual result from this environment**, `prp-lan-a` down for 8 of the 20
-seconds of continuous traffic:
+**Result, on the OCP 5.0.0-rc.2 / 3-NIC / operator-managed setup**,
+`prp-lan-a` down for 8 of the 20 seconds of continuous traffic:
 ```
 --- 10.10.10.2 ping statistics ---
-97 packets transmitted, 97 received, 0% packet loss, time 19873ms
-rtt min/avg/max/mdev = 0.346/0.533/0.888/0.075 ms
+97 packets transmitted, 97 received, 0% packet loss, time 19923ms
+rtt min/avg/max/mdev = 0.439/0.560/0.800/0.063 ms
 ```
-**Zero packet loss, no latency spike, across the entire outage window.**
-This is PRP working as designed: `prp0` kept sending/receiving over the
-surviving path (`prp-lan-b`) for the whole 8-second outage, and traffic was
-already flowing normally again before the link was even restored.
+**Zero packet loss, no latency spike, across the entire outage window** -
+identical to the result on the earlier OCP 4.19.45 / 4-NIC / manual-nmcli
+setup. `prp0` kept sending/receiving over the surviving path
+(`prp-lan-b`) for the whole 8-second outage.
 
-Confirm recovery:
+### 4. Both paths actually carry traffic (not just one active link)
+
+Packet counters on the two slave ports should be **identical** - PRP
+duplicates every frame onto both paths, it doesn't merely fail over. (From
+the 4.19 run, same mechanism, same result on 5.0):
 ```
-$ ssh core@192.168.130.101 -- ip -br link show enp7s0
-enp7s0    UP    52:54:00:aa:aa:01  <BROADCAST,MULTICAST,UP,LOWER_UP>
-$ ssh core@192.168.130.101 -- ip -d link show prp0 | grep -o 'proto [0-9]'
-proto 1
+enp7s0 (prp-lan-a)   RX  3392B / 48pkt      TX  6660B / 82pkt
+enp8s0 (prp-lan-b)   RX  3392B / 48pkt      TX  6660B / 82pkt   <- identical
 ```
 
 ### Pass criteria summary
 
-| Check | Expected | 
-|---|---|
-| `ip -d link show prp0` | exists, `proto 1` |
-| Cross-node ping | succeeds, sub-ms after warm-up |
-| Slave port counters | identical on both ports |
-| Single-path failure, mid-traffic | **0% packet loss** for the duration |
-| Link restore | both ports return to `UP`/`LOWER_UP`, `prp0` still `proto 1` |
+| Check | Expected | 5.0.0-rc.2 result |
+|---|---|---|
+| `ip -d link show prp0` | exists, `proto 1` | Pass |
+| Cross-node ping | succeeds, sub-ms after warm-up | Pass |
+| Slave port counters | identical on both ports | Pass |
+| Single-path failure, mid-traffic | **0% packet loss** for the duration | Pass - 97/97 |
+| Link restore | both ports return to `UP`/`LOWER_UP`, `prp0` still `proto 1` | Pass |
 
-All five passed in this environment on both `sno-a` and `sno-b`.
+All five passed on both `sno-a` and `sno-b`, on both OCP versions tested.
+
+## Kernel module autoload - no action needed
+
+`prp0` depends on the `hsr` kernel module. It does **not** need an explicit
+`/etc/modules-load.d/` entry: `modinfo hsr` reports `alias: rtnl-link-hsr`,
+the same on-demand autoload mechanism the kernel uses for `bonding`/`vlan`/
+`bridge` - when NetworkManager asks for an hsr-type link, the kernel loads
+the module itself. Verified loaded on both nodes:
+```
+$ lsmod | grep hsr
+hsr    65536  0
+```
+and verified surviving a real reboot (the MCO-driven reboot during the
+OCP 4.19 run brought `prp0` back with `proto 1` with zero manual
+intervention).

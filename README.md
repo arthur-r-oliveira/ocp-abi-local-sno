@@ -1,112 +1,61 @@
-# **Deploy a Single Node OpenShift (SNO) Cluster on KVM with Ansible**
+# ocp-abi-local-sno
 
-This repository contains an Ansible playbook to automate the deployment of a Single Node OpenShift (SNO) cluster on a KVM/libvirt hypervisor running on a Fedora workstation. The playbook uses the [agent-based installer method](https://docs.redhat.com/en/documentation/openshift_container_platform/latest/html/installing_an_on-premise_cluster_with_the_agent-based_installer/preparing-to-install-with-agent-based-installer).
+Deploys **two independent Single Node OpenShift clusters** (`sno-a`, `sno-b`) on a
+single KVM/libvirt host via the agent-based installer, cross-connected over two
+isolated networks carrying a real Parallel Redundancy Protocol (PRP, RFC 62439-3)
+link between them - built with the kernel's `hsr` driver.
 
-## **Prerequisites**
+Currently targets **OpenShift 5.0.0-rc.2**.
 
-Before you begin, ensure you have the following:
+```
+                 ocp-public (NAT) - br-ex / API / Ingress / egress
+        ┌───────────────┬───────────────────────┬───────────────┐
+        │                                                        │
+   ┌────┴────┐                                              ┌────┴────┐
+   │  sno-a  │──eth1── prp-lan-a (isolated) ─────────────────│  sno-b  │
+   │ 8vCPU/  │──eth2── prp-lan-b (isolated) ─────────────────│ 16GB    │
+   │  16GB   │                                               │         │
+   └─────────┘                                               └─────────┘
+   prp0 = eth1+eth2 (hsr driver, PRP mode)   10.10.10.1 / 10.10.10.2
+```
 
-* A Fedora workstation with at least 32GB of RAM and 200GB of free disk space.  
-* A user with sudo privileges.  
-* Ansible Navigator installed: sudo dnf install ansible-navigator  
-* Podman or Docker installed and running.
+3 vNICs per node: one dedicated to `ocp-public` (br-ex/API/Ingress/egress),
+two dedicated to PRP - nothing shared between roles.
 
-## **1. Clone or Set Up the Project Files**
+## Start here
 
-Ensure all the project files (`sno_playbook.yml`, `vars/main.yml`, etc.) are in a single directory on your Fedora workstation.
+- **[docs/installation.md](docs/installation.md)** - architecture, prerequisites,
+  configuration, running the playbook, every real gotcha hit deploying this.
+- **[docs/prp-test-case.md](docs/prp-test-case.md)** - the PRP mechanism, the
+  installer bug that blocks it at Day-0, the Day-2 fix via the
+  `kubernetes-nmstate-operator`, and a real hypervisor-level failover test.
 
-## **2. Create the Ansible Navigator Configuration**
+## Layout
 
-ansible-navigator uses execution environments to run playbooks in a consistent and isolated manner.
+| Path | What |
+|---|---|
+| `sno_playbook.yml`, `tasks/deploy_node.yml`, `vars/main.yml` | The Ansible playbook - libvirt networks, VM definitions, ignition/agent-config generation, one loop iteration per node in `vars/main.yml`'s `sno_nodes` list |
+| `templates/` | Jinja templates for the 3 libvirt networks, the VM domain XML, and the agent-based installer's `install-config.yaml`/`agent-config.yaml` |
+| `day2-manifests/` | Applied via `oc apply` **after** `install-complete`, once per cluster - installs `kubernetes-nmstate-operator` and configures `prp0` via `NodeNetworkConfigurationPolicy`. Not part of the ansible run; see docs/prp-test-case.md for why this has to be Day-2 |
+| `scripts/` | `add-cluster-hosts.sh` (per-node `/etc/hosts` entries) and `prp-lab-tunnel.sh` (an `sshuttle` tunnel scoped to `ocp-public` only, for reaching the VMs from a workstation that isn't the KVM host) |
+| `docs/` | The real documentation - read this, not this file |
 
-First, create a file named `requirements.yml` to specify the collections needed:
+## Quick start
 
-~~~
-# requirements.yml  
-collections:  
-  - community.libvirt  
-  - ansible.posix  
-  - community.general
-~~~
+```
+ansible-playbook sno_playbook.yml
+```
 
-Next, create a file named `execution-environment.yml`. This file defines how to build your custom environment:
+then, per node, once `openshift-install agent wait-for install-complete` returns:
 
-~~~
-# execution-environment.yml  
-version: 3  
-images:  
-  base_image:  
-    name: quay.io/ansible/creator-ee:latest  
-dependencies:  
-  galaxy: requirements.yml
-~~~
+```
+export KUBECONFIG=<install_dir>/auth/kubeconfig
+oc apply -f day2-manifests/00-nmstate-catalogsource.yaml
+oc apply -f day2-manifests/01-nmstate-operator-subscription.yaml
+# wait for: oc get csv -n openshift-nmstate  ->  Succeeded
+oc apply -f day2-manifests/02-nmstate-cr.yaml
+# wait for: oc get pods -n openshift-nmstate  ->  nmstate-handler Running
+oc apply -f day2-manifests/03-nncp-sno-a.yaml   # or 03-nncp-sno-b.yaml
+```
 
-Finally, create the main `ansible-navigator.yml` configuration file. This tells ansible-navigator to use the build instructions you just defined:
-
-~~~
-# ansible-navigator.yml
----  
-ansible-navigator:  
-  execution-environment:  
-    build:  
-      file: execution-environment.yml  
-      context: .  
-    image: sno-ee:latest  
-    pull:  
-      policy: missing  
-    container-engine: podman  
-    volume-mounts:  
-      - src: "./"  
-        dest: "/home/runner/project"
-~~~
-
-## **3. Customize Variables**
-
-All the customizable variables are in the vars/main.yml file.
-
-**IMPORTANT:**
-
-* You must update the paths for `pull_secret_path` and `ssh_public_key_path`.  
-* The `sno_domain` should be a non-reserved domain (e.g., sno.test, mycluster.example). Do not use .localhost as it will conflict with systemd-resolved and cause the installation to fail.
-
-## **4. Run the Ansible Playbook**
-
-Before running the playbook, especially after a failed attempt, ensure you have a clean environment:
-
-~~~
-# Destroy any existing VM  
-sudo virsh destroy local-sno  
-sudo virsh undefine local-sno --remove-all-storage
-# Delete the old installation directory  
-sudo rm -rf /home/arolivei/sno-install
-~~~
-
-Execute the playbook using `ansible-navigator`. The --mode stdout flag provides output similar to `ansible-playbook`.
-
-~~~
-ansible-navigator run sno_playbook.yml --mode stdout
-~~~
-
-## **5. Monitor the Installation**
-
-The installation process will take some time. You can monitor the progress by connecting to the VM's VNC console using a tool like virt-viewer or the Cockpit web interface.
-
-To monitor the installation progress from the host, run the following command. You must use sudo because the installation directory is owned by root.
-
-~~~
-sudo openshift-install --dir={{ sno_install_dir }} agent wait-for install-complete
-~~~
-
-## **6. Access the Cluster**
-
-Once the installation is complete, the wait-for command will exit and provide you with the command to access your cluster. The kubeconfig file will be located in the sno-install/auth directory.
-
-~~~
-export KUBECONFIG={{ sno_install_dir }}/auth/kubeconfig  
-oc get nodes
-~~~
-
-## **Troubleshooting**
-
-* **panic: interface conversion: asset.Asset is nil:** This error occurs when the `openshift-install agent wait-for` command is run against an incomplete or stale installation directory. Always perform the full cleanup steps before re-running the playbook.  
-* **DNS Wildcard Error:** If the installation fails with a DNS wildcard error, ensure you are not using `.localhost` for your `sno_domain` in `vars/main.yml`.  
+Full details, exact commands, and real output from an actual run: **docs/installation.md**.

@@ -12,7 +12,7 @@ additionalNTPSources:
 hosts:
   - hostname: {{ node.hostname }}.{{ sno_domain }}
     # These name<->MAC bindings are what let us use the logical names
-    # eth0..eth3 below regardless of whatever predictable name (enpXsY)
+    # eth0..eth2 below regardless of whatever predictable name (enpXsY)
     # the kernel would otherwise assign - the agent installer generates
     # udev/systemd-link rules from this list at Day 0.
     interfaces:
@@ -22,12 +22,12 @@ hosts:
         macAddress: "{{ node_macs.eth1 }}"
       - name: eth2
         macAddress: "{{ node_macs.eth2 }}"
-      - name: eth3
-        macAddress: "{{ node_macs.eth3 }}"
     rootDeviceHints:
       deviceName: /dev/vda
     networkConfig:
       interfaces:
+        # eth0 is the sole NIC carrying br-ex / cluster API / Ingress /
+        # egress - a dedicated port, not shared with anything else.
         - name: eth0
           type: ethernet
           state: up
@@ -40,23 +40,23 @@ hosts:
                 prefix-length: {{ ocp_public_prefix }}
           ipv6:
             enabled: false
-        - name: eth1
-          type: ethernet
-          state: up
-          mac-address: "{{ node_macs.eth1 }}"
-          ipv4:
-            enabled: false
-          ipv6:
-            enabled: false
-        # eth2/eth3 are the PRP LRE slave ports: no IP of their own, they
+        # eth1/eth2 are the PRP LRE slave ports: no IP of their own, they
         # only carry frames for the prp0 interface below. mac-address here
         # is deliberately node.prp_mac_address (shared by both ports), NOT
-        # each port's own hardware MAC (node_macs.eth2/eth3) - nmstate
+        # each port's own hardware MAC (node_macs.eth1/eth2) - nmstate
         # applies this as the port's operational MAC via NetworkManager,
         # on top of the distinct hardware MAC used above (in `hosts:`) for
         # udev-based renaming. HSR/PRP requires both LRE ports to present
         # one shared logical MAC; the hardware MACs must stay distinct or
         # renaming is ambiguous.
+        - name: eth1
+          type: ethernet
+          state: up
+          mac-address: "{{ node.prp_mac_address }}"
+          ipv4:
+            enabled: false
+          ipv6:
+            enabled: false
         - name: eth2
           type: ethernet
           state: up
@@ -65,29 +65,30 @@ hosts:
             enabled: false
           ipv6:
             enabled: false
-        - name: eth3
-          type: ethernet
-          state: up
-          mac-address: "{{ node.prp_mac_address }}"
-          ipv4:
-            enabled: false
-          ipv6:
-            enabled: false
-        # Day-0 PRP: bind eth2 (prp-lan-a) + eth3 (prp-lan-b) into a single
+        # Day-0 PRP: bind eth1 (prp-lan-a) + eth2 (prp-lan-b) into a single
         # Link Redundancy Entity via the kernel hsr driver in "prp" mode
-        # (RFC 62439-3). Every frame prp0 sends goes out BOTH eth2 and
-        # eth3 with a Redundancy Check Trailer appended; duplicates
+        # (RFC 62439-3). Every frame prp0 sends goes out BOTH eth1 and
+        # eth2 with a Redundancy Check Trailer appended; duplicates
         # arriving from either LAN are suppressed on receive. Both
-        # sno-a and sno-b get this same shape, and eth2/eth3 on both
+        # sno-a and sno-b get this same shape, and eth1/eth2 on both
         # nodes land on the same isolated bridges (prp-lan-a/prp-lan-b),
         # so the two nodes' prp0 interfaces are directly L2-adjacent
         # over BOTH redundant paths.
+        #
+        # NOTE: confirmed broken on both OCP 4.19.45 and 5.0.0-rc.2 - this
+        # Day-0 declaration validates fine but does NOT survive into a
+        # working interface at first boot: the installer's embedded
+        # nmstate-to-NetworkManager serializer drops HSR-specific fields
+        # (see docs/prp-test-case.md). Kept here anyway so we notice
+        # immediately if a future OCP version fixes that bug; the durable
+        # fix is the kubernetes-nmstate operator + NodeNetworkConfigurationPolicy
+        # applied Day-2 (see day2-manifests/ and docs/prp-test-case.md).
         - name: prp0
           type: hsr
           state: up
           hsr:
-            port1: eth2
-            port2: eth3
+            port1: eth1
+            port2: eth2
             multicast-spec: {{ prp_multicast_spec }}
             protocol: prp
           ipv4:
