@@ -1,0 +1,15 @@
+<network>
+  <name>prp-lan-a-nat</name>
+  <forward mode='nat'/>
+  <bridge name='virbr-prp-a-nat' stp='on' delay='0'/>
+  <domain name='prp-lan-a-nat.local' localOnly='yes'/>
+  <ip address='{{ prp_lan_a_nat_gateway }}' netmask='255.255.255.0'>
+    <!--
+      No DHCP range here on purpose: the only guest on this network
+      (prp0's port1) gets a static nmstate-assigned address (dhcp: false),
+      so there's no client that would ever request a lease. Unlike
+      ocp-public's network template, there's nothing else expected to
+      show up here needing one.
+    -->
+  </ip>
+</network>

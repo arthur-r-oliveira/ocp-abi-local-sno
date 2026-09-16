@@ -1,0 +1,69 @@
+# vars/topologies/single-primary-prp.yml
+# Test Case 3 (spec: docs/spec-test-case-3-prp-primary.md): one SNO node,
+# 2 NICs, PRP is the PRIMARY network - prp0 carries the node's only IP,
+# and br-ex forms on top of it (OVN-Kubernetes's configure-ovs.sh follows
+# whichever interface holds the default route). No ocp-public NIC exists
+# in this topology at all.
+#
+# Lab-sandbox PoC scope, decided explicitly: prp-lan-a-nat/prp-lan-b-nat
+# are two independent NAT networks sharing this host's one connected
+# physical uplink underneath - this validates the OS/software mechanism
+# (Day-0 extra manifest + AgentConfig NMState -> prp0 -> br-ex), NOT
+# physical dual-path redundancy. That validation is the end customer's
+# job later, on official hardware with two real cable runs.
+#
+# KNOWN CAVEAT worth testing for, not just assuming away: because libvirt
+# can't have two active NAT networks share one subnet, prp0's static
+# address below has to live in ONE of the two networks' subnets
+# (prp-lan-a-nat's). Real PRP treats both LAN A and LAN B as equally
+# valid paths to the SAME destination; here they're on different
+# subnets underneath. The HSR/PRP duplication itself doesn't care (every
+# frame leaves both ports regardless), but if prp-lan-b-nat's own NAT/
+# reverse-path handling on this host ever rejects the duplicate frame's
+# "wrong-subnet" source IP, that would be a lab-topology artifact, not a
+# PRP or installer bug - note it explicitly if observed during testing.
+
+vm_definition_template: "templates/vm-definition/single-primary-prp.xml.j2"
+agent_config_template: "templates/agent-config/single-primary-prp.yaml.j2"
+
+topology_mac_names: ['eth0', 'eth1']
+
+# No ocp-public network exists in this topology, so there's nothing to
+# reserve a static DHCP lease against - prp0 gets its address as a static
+# nmstate assignment (dhcp: false) instead, same as every other interface
+# in this repo.
+topology_needs_static_dhcp: false
+
+# This is the crux of the spec: load the hsr kernel module via an
+# agent-based-installer Day-0 extra manifest (day0-manifests/), since
+# there is no kubernetes-nmstate-operator in this context to fall back
+# on for a Day-2 fix.
+topology_needs_day0_extra_manifests: true
+
+net_prp_lan_a: "prp-lan-a-nat"
+net_prp_lan_b: "prp-lan-b-nat"
+
+sno_libvirt_networks:
+  - name: "{{ net_prp_lan_a }}"
+    template: "templates/networks/prp-lan-a-nat.xml.j2"
+  - name: "{{ net_prp_lan_b }}"
+    template: "templates/networks/prp-lan-b-nat.xml.j2"
+
+prp_lan_a_nat_gateway: "192.168.140.1"
+prp_lan_a_nat_subnet_cidr: "192.168.140.0/24"
+prp_lan_b_nat_gateway: "192.168.150.1"
+prp_lan_b_nat_subnet_cidr: "192.168.150.0/24"
+
+# prp0's address lives on prp-lan-a-nat's subnet - see the caveat above.
+sno_machine_network_cidr: "{{ prp_lan_a_nat_subnet_cidr }}"
+
+prp_prefix_length: 24
+prp_multicast_spec: 0
+
+sno_nodes:
+  - vm_name: "sno-prp-primary"
+    hostname: "sno-prp-primary"
+    install_dir: "{{ sno_storage_base }}/sno-install/sno-prp-primary"
+    # No separate ip_address - prp0 is the only interface with an IP.
+    prp_ip_address: "192.168.140.50"
+    prp_mac_address: "52:54:00:aa:aa:10"

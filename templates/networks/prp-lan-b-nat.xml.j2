@@ -1,0 +1,9 @@
+<network>
+  <name>prp-lan-b-nat</name>
+  <forward mode='nat'/>
+  <bridge name='virbr-prp-b-nat' stp='on' delay='0'/>
+  <domain name='prp-lan-b-nat.local' localOnly='yes'/>
+  <ip address='{{ prp_lan_b_nat_gateway }}' netmask='255.255.255.0'>
+    <!-- See prp-lan-a-nat.xml.j2 - no DHCP range needed here either. -->
+  </ip>
+</network>

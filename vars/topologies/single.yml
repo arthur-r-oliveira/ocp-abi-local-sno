@@ -1,0 +1,31 @@
+# vars/topologies/single.yml
+# Test Case 1: a single plain SNO node, no PRP at all. Reuses the same
+# ocp-public NAT network as dual-sidecar-prp (same subnet/gateway) - a
+# lone extra VM on that network doesn't conflict with sno-a/sno-b, it's
+# just distinguished by IP, so it's safe to leave that network shared
+# rather than invent a redundant duplicate of it.
+
+vm_definition_template: "templates/vm-definition/single.xml.j2"
+agent_config_template: "templates/agent-config/single.yaml.j2"
+
+topology_mac_names: ['eth0']
+topology_needs_static_dhcp: true
+topology_static_dhcp_network: "{{ net_ocp_public }}"
+topology_needs_day0_extra_manifests: false
+
+net_ocp_public: "ocp-public"
+
+sno_libvirt_networks:
+  - name: "{{ net_ocp_public }}"
+    template: "templates/networks/ocp-public.xml.j2"
+
+ocp_public_gateway: "192.168.130.1"
+ocp_public_prefix: 24
+ocp_public_subnet_cidr: "192.168.130.0/24"
+sno_machine_network_cidr: "{{ ocp_public_subnet_cidr }}"
+
+sno_nodes:
+  - vm_name: "sno-single"
+    hostname: "sno-single"
+    install_dir: "{{ sno_storage_base }}/sno-install/sno-single"
+    ip_address: "192.168.130.103"
