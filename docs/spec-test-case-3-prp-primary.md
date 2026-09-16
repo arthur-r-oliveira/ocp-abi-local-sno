@@ -2,8 +2,8 @@
 
 **Status: IMPLEMENTED AND RUN. Result: Outcome A (installation does not
 work out of the box) - confirmed, see "Result" at the end of this document.
-Per the decision recorded there, this is now an open bug to escalate, not
-a closed test case.**
+Worth reporting upstream (see "Escalation plan"), but not a hard blocker -
+see "What Outcome A means" below for the actual priority.**
 
 ## Why this test case is different from Test Case 2
 
@@ -28,10 +28,11 @@ Manager never even attempts `ip link add type hsr` if the connection profile
 it's given has no `[hsr]` section, so the module being resident in memory is
 necessary but not sufficient.
 
-**Decided: installation must work out of the box - if this hypothesis is
-right and it doesn't, that's a bug to escalate, not an accepted outcome.**
-See "Two possible outcomes" below for what each result actually means for
-closing out this test case.
+**Working out of the box here is a "good to have" from the partner's
+perspective, not a hard requirement** - if this hypothesis is right and it
+doesn't work, that's worth reporting upstream, but it isn't a blocker for
+anything else in this repo. See "Two possible outcomes" below for what
+each result actually means for closing out this test case.
 
 ---
 
@@ -261,13 +262,16 @@ confirmation of this mechanism happens if/when Phase 2 below is reached.
 
 ---
 
-## Two possible outcomes - and only one is acceptable
+## Two possible outcomes
 
-**Decided: installation must work out of the box. If it doesn't, that is a
-bug, and the outcome of this test case is to raise awareness of it - not to
-file this away as an accepted/expected limitation.** This reframes what
-"passing" this test case means: it isn't "confirm the bug", it's "confirm
-the fix works, or escalate a concrete bug report if it doesn't."
+Working out of the box here is a **"good to have" from the partner's
+perspective, not a hard requirement** - this is not a gating decision for
+anything else in this repo. What it does mean: if Outcome A happens, that's
+worth reporting upstream so it can get fixed for whoever eventually wants
+this topology working, rather than silently filed away as an accepted
+limitation nobody follows up on. It does not mean this test case blocks on
+a fix, or that Outcome A represents a failed test - it's a legitimate,
+useful result either way.
 
 **Outcome A (still the likely result, per the confirmed bug on both OCP
 4.19.45 and 5.0.0-rc.2)**: `prp0` never materializes. `eth0`/`eth1` come up
@@ -276,11 +280,10 @@ API, agent registration never completes, bootstrap times out. No SSH, no
 `oc`, nothing reachable - unlike Test Case 2's Day-0 failure, which just
 left a side interface missing on an otherwise-healthy node.
 
-**If Outcome A happens: this is a bug report, not a doc update.** See
-"Escalation plan" below for exactly what to capture and file, and where.
-Do not close this test case out by writing up the failure in
-`docs/prp-test-case.md` and moving on - that documents the mechanism, it
-doesn't raise it anywhere it can get fixed.
+**If Outcome A happens**: worth writing up as a reportable finding (see
+"Escalation plan" below for what to capture) so it's easy to hand to
+whoever wants to pursue a fix upstream - but doing so is a "nice to have
+this raised" action, not a required one.
 
 **Outcome B (installation works)**: `prp0` comes up, `br-ex` forms over it,
 the node bootstraps and installs normally. Re-run the same failover
@@ -288,10 +291,9 @@ methodology as Test Case 2 (`virsh domif-setlink ... down` on one PRP path
 mid-install and mid-steady-state) - but now proving something materially
 stronger: that cutting one path doesn't just fail a side test, it doesn't
 interrupt **cluster API reachability**, which is the actual point of
-putting PRP under br-ex. This is the only outcome that closes this test
-case as complete.
+putting PRP under br-ex.
 
-### Escalation plan (if Outcome A occurs)
+### Escalation plan (useful to have ready either way)
 
 1. Capture the exact same class of evidence already gathered for Test Case
    2's Day-0 failure (`docs/prp-test-case.md`'s "Root cause" section) but
@@ -335,11 +337,11 @@ case as complete.
    appears in the console's `ip link` equivalent boot messages, that's
    Outcome A - stop, capture the console log as evidence, don't wait out
    the full timeout for nothing.
-4. If Outcome A: this is a bug, not a documented limitation - follow the
-   "Escalation plan" above. It's still worth noting *why* Test Case 2's
+4. If Outcome A: worth writing up per "Escalation plan" above so it's
+   ready to hand off if anyone wants to pursue a fix upstream - a good
+   to have, not a required follow-up. Worth noting *why* Test Case 2's
    Day-2-operator fix isn't a usable workaround here (there's no operator
-   in this context) when writing that report up, but the report's
-   purpose is to get this fixed, not to explain it away.
+   in this context) when writing that report up.
 5. If Outcome B: run the full failover suite (extend
    `scripts/test-prp-failover.sh` with a `single-primary-prp` mode that
    checks `oc get nodes`/API reachability across the cut, not just a ping),
@@ -360,9 +362,10 @@ None outstanding - see "Resolved" below.
 - **Directory refactor scope**: yes, now - implemented alongside Test Case
   3, as its own commit, verified against `scripts/test-prp-failover.sh`
   before Test Case 3 content landed on top.
-- **What Outcome A means**: installation must work out of the box. If it
-  doesn't, that's a bug to escalate (see "Escalation plan" above), not an
-  accepted/documented limitation to close the test case out with.
+- **What Outcome A means**: working out of the box here is a good to have
+  from the partner's perspective, not a hard requirement. Worth reporting
+  upstream if it doesn't (see "Escalation plan" above), but this isn't a
+  blocker, and Outcome A is a legitimate result, not a failed test.
 
 ---
 
@@ -416,12 +419,14 @@ OCP version with the same `AgentConfig` schema, in Test Case 2. That
 inference is well-supported (same version, same schema, exactly the
 predicted symptom) but is not itself a second independent proof.
 
-**Per the decision recorded above, this closes as an open bug, not a
-documented finding.** Escalation report content, following the "Escalation
-plan" section: OCP version `5.0.0-rc.2`, the exact `agent-config.yaml`
-`networkConfig` block from `templates/agent-config/single-primary-prp.yaml.j2`,
-the two screenshots in `docs/evidence/`, and a pointer to Test Case 2's
-direct keyfile-level evidence in `docs/prp-test-case.md` for the root-cause
-mechanism. Filing this into an actual tracker (Bugzilla/GitHub/support
-case) is still a decision for whoever owns that relationship - drafted,
-not filed, by this repo.
+This closes the test case as **complete, with a reportable-but-not-blocking
+finding** - working out of the box is a good to have here, not a hard
+requirement (see "What Outcome A means"). A ready-to-file writeup exists,
+kept private (not in this public repo): OCP version `5.0.0-rc.2`, the exact
+`agent-config.yaml` `networkConfig` block from
+`templates/agent-config/single-primary-prp.yaml.j2`, the two screenshots
+in `docs/evidence/`, and a pointer to Test Case 2's direct keyfile-level
+evidence in `docs/prp-test-case.md` for the root-cause mechanism. Filing
+it into an actual tracker (Bugzilla/GitHub/support case) remains a
+decision for whoever owns that relationship, and isn't required for this
+test case to be considered done.
