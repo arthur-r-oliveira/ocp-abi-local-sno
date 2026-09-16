@@ -1,0 +1,37 @@
+apiVersion: v1alpha1
+kind: AgentConfig
+metadata:
+  name: {{ node.hostname }}
+rendezvousIP: {{ node.ip_address }}
+additionalNTPSources:
+  - {{ ocp_public_gateway }}
+hosts:
+  - hostname: {{ node.hostname }}.{{ sno_domain }}
+    interfaces:
+      - name: eth0
+        macAddress: "{{ node_macs.eth0 }}"
+    rootDeviceHints:
+      deviceName: /dev/vda
+    networkConfig:
+      interfaces:
+        - name: eth0
+          type: ethernet
+          state: up
+          mac-address: "{{ node_macs.eth0 }}"
+          ipv4:
+            enabled: true
+            dhcp: false
+            address:
+              - ip: {{ node.ip_address }}
+                prefix-length: {{ ocp_public_prefix }}
+          ipv6:
+            enabled: false
+      dns-resolver:
+        config:
+          server:
+            - {{ ocp_public_gateway }}
+      routes:
+        config:
+          - destination: 0.0.0.0/0
+            next-hop-address: {{ ocp_public_gateway }}
+            next-hop-interface: eth0

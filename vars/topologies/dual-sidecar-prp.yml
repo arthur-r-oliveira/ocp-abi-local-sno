@@ -1,0 +1,72 @@
+# vars/topologies/dual-sidecar-prp.yml
+# Test Case 2 (implemented, working): two independent SNO clusters,
+# 3 NICs each - one dedicated to ocp-public, two dedicated to an isolated
+# PRP side network between the two nodes. See docs/prp-test-case.md.
+
+vm_definition_template: "templates/vm-definition/dual-sidecar-prp.xml.j2"
+agent_config_template: "templates/agent-config/dual-sidecar-prp.yaml.j2"
+
+# Interface order in vm-definition.xml.j2 -> eth0..eth2 mapping. Must stay
+# in sync with that template's <interface> block order.
+topology_mac_names: ['eth0', 'eth1', 'eth2']
+
+# eth0 gets a static DHCP reservation on ocp-public so its address is
+# stable and doesn't collide with the network's own stray-client range.
+topology_needs_static_dhcp: true
+topology_static_dhcp_network: "{{ net_ocp_public }}"
+
+# No Day-0 extra manifests needed here - PRP is a side network, not
+# load-bearing for cluster bring-up, so the known Day-0 HSR/PRP bug is
+# just a missing side interface (fixed Day-2 via kubernetes-nmstate-operator,
+# see day2-manifests/), not a blocker to the install itself.
+topology_needs_day0_extra_manifests: false
+
+# --- Libvirt networks ---------------------------------------------------
+# ocp-public is a NAT network shared by both nodes; prp-lan-a/prp-lan-b are
+# isolated L2-only segments also shared by both nodes, which is what lets
+# their prp0 (HSR/PRP) interfaces see each other over both redundant paths.
+net_ocp_public: "ocp-public"
+net_prp_lan_a: "prp-lan-a"
+net_prp_lan_b: "prp-lan-b"
+
+sno_libvirt_networks:
+  - name: "{{ net_ocp_public }}"
+    template: "templates/networks/ocp-public.xml.j2"
+  - name: "{{ net_prp_lan_a }}"
+    template: "templates/networks/prp-lan-a.xml.j2"
+  - name: "{{ net_prp_lan_b }}"
+    template: "templates/networks/prp-lan-b.xml.j2"
+
+# ocp-public addressing (eth0 - the sole NIC carrying br-ex/API/Ingress/egress)
+ocp_public_gateway: "192.168.130.1"
+ocp_public_prefix: 24
+ocp_public_subnet_cidr: "192.168.130.0/24"
+sno_machine_network_cidr: "{{ ocp_public_subnet_cidr }}"
+
+# PRP (Parallel Redundancy Protocol, RFC 62439-3) addressing for prp0.
+# Both nodes' prp0 live on this same /24, reachable over prp-lan-a AND
+# prp-lan-b simultaneously. multicast-spec must match across nodes on
+# the same PRP network - it seeds the supervision-frame multicast MAC
+# (01:15:4E:00:01:<spec>) both LREs listen on.
+prp_prefix_length: 24
+prp_multicast_spec: 0
+
+# --- Fleet: two independent SNO clusters wired into the same PRP LANs ---
+sno_nodes:
+  - vm_name: "sno-a"
+    hostname: "sno-a"
+    install_dir: "{{ sno_storage_base }}/sno-install/sno-a"
+    ip_address: "192.168.130.101"
+    prp_ip_address: "10.10.10.1"
+    # eth1 and eth2 MUST share this exact MAC: prp0 is one logical LRE
+    # identity presented out both ports, and nmstate's hsr validation
+    # (confirmed against nmstatectl 2.2.60) rejects differing port MACs.
+    # Must differ from sno-b's, since both nodes' eth1 share prp-lan-a
+    # (and eth2 shares prp-lan-b) on the wire.
+    prp_mac_address: "52:54:00:aa:aa:01"
+  - vm_name: "sno-b"
+    hostname: "sno-b"
+    install_dir: "{{ sno_storage_base }}/sno-install/sno-b"
+    ip_address: "192.168.130.102"
+    prp_ip_address: "10.10.10.2"
+    prp_mac_address: "52:54:00:aa:aa:02"

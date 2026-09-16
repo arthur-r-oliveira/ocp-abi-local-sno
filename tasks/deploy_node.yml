@@ -1,6 +1,9 @@
 # tasks/deploy_node.yml
 # Included by sno_playbook.yml with `loop: "{{ sno_nodes }}"` and
 # `loop_control.loop_var: node`. Everything here is scoped to one SNO node.
+# Topology-specific behavior (NIC count/roles, whether a static DHCP
+# reservation or Day-0 extra manifests are needed) comes from vars set in
+# vars/topologies/{{ sno_topology }}.yml, not from anything in this file.
 
 - name: "[{{ node.vm_name }}] Create installation directory"
   ansible.builtin.file:
@@ -27,7 +30,7 @@
 - name: "[{{ node.vm_name }}] Ensure SNO VM is defined so we can get its MAC addresses"
   community.libvirt.virt:
     command: define
-    xml: "{{ lookup('template', 'templates/vm-definition.xml.j2') }}"
+    xml: "{{ lookup('template', vm_definition_template) }}"
 
 - name: "[{{ node.vm_name }}] Get MAC addresses from the defined VM"
   community.libvirt.virt:
@@ -35,17 +38,38 @@
     name: "{{ node.vm_name }}"
   register: vm_xml_result
 
-# regex_findall preserves document order, which matches the interface
-# order written in vm-definition.xml.j2 (ocp-public, prp-lan-a,
-# prp-lan-b) -> eth0..eth2. If you ever reorder the <interface> blocks
-# in that template, this mapping must move with them.
-- name: "[{{ node.vm_name }}] Map MAC addresses to eth0..eth2 by interface order"
+# regex_findall preserves document order, which matches the <interface>
+# block order in this topology's vm_definition_template. If that template
+# ever gets reordered, topology_mac_names' order must move with it.
+- name: "[{{ node.vm_name }}] Map MAC addresses to interfaces by document order"
   ansible.builtin.set_fact:
-    node_macs: "{{ dict(['eth0', 'eth1', 'eth2'] | zip(vm_xml_result.get_xml | regex_findall(\"mac address='([^']+)'\"))) }}"
+    node_macs: "{{ dict(topology_mac_names | zip(vm_xml_result.get_xml | regex_findall(\"mac address='([^']+)'\"))) }}"
+
+# Test Case 3 only (single-primary-prp): the hsr kernel module has to be
+# loaded before NetworkManager processes the AgentConfig's networkConfig,
+# and there is no kubernetes-nmstate-operator here to fall back on for a
+# Day-2 fix - so this ships as a Day-0 extra manifest instead, picked up
+# automatically by `openshift-install agent create image` from
+# <install_dir>/openshift/*.yaml. See docs/spec-test-case-3-prp-primary.md -
+# this makes the module available, it does NOT by itself work around the
+# known Day-0 HSR/PRP serializer bug documented in docs/prp-test-case.md.
+- name: "[{{ node.vm_name }}] Ensure Day-0 extra manifests directory exists"
+  ansible.builtin.file:
+    path: "{{ node.install_dir }}/openshift"
+    state: directory
+    mode: '0755'
+  when: topology_needs_day0_extra_manifests | default(false)
+
+- name: "[{{ node.vm_name }}] Place hsr module autoload as a Day-0 extra manifest"
+  ansible.builtin.template:
+    src: day0-manifests/99-hsr-module-autoload.yaml.j2
+    dest: "{{ node.install_dir }}/openshift/99-hsr-module-autoload.yaml"
+    mode: '0644'
+  when: topology_needs_day0_extra_manifests | default(false)
 
 - name: "[{{ node.vm_name }}] Create agent-config.yaml now that we have MAC addresses"
   ansible.builtin.template:
-    src: templates/agent-config.yaml.j2
+    src: "{{ agent_config_template }}"
     dest: "{{ node.install_dir }}/agent-config.yaml"
     mode: '0644'
 
@@ -54,12 +78,13 @@
     cmd: "openshift-install agent create image --dir={{ node.install_dir }} --log-level=debug"
     creates: "{{ node.install_dir }}/agent.x86_64.iso"
 
-- name: "[{{ node.vm_name }}] Configure static DHCP entry on ocp-public"
+- name: "[{{ node.vm_name }}] Configure static DHCP entry"
+  when: topology_needs_static_dhcp | default(true)
   block:
-    - name: "[{{ node.vm_name }}] Get current '{{ net_ocp_public }}' network configuration"
+    - name: "[{{ node.vm_name }}] Get current '{{ topology_static_dhcp_network }}' network configuration"
       community.libvirt.virt_net:
         command: get_xml
-        name: "{{ net_ocp_public }}"
+        name: "{{ topology_static_dhcp_network }}"
       register: current_net_xml
       changed_when: false
 
@@ -76,10 +101,10 @@
       register: modified_net_xml
       changed_when: current_net_xml.get_xml != modified_net_xml.xmlstring
 
-    - name: "[{{ node.vm_name }}] Apply updated '{{ net_ocp_public }}' network configuration"
+    - name: "[{{ node.vm_name }}] Apply updated '{{ topology_static_dhcp_network }}' network configuration"
       community.libvirt.virt_net:
         command: define
-        name: "{{ net_ocp_public }}"
+        name: "{{ topology_static_dhcp_network }}"
         xml: "{{ modified_net_xml.xmlstring }}"
       when: modified_net_xml.changed
       notify: Restart libvirtd
@@ -89,12 +114,14 @@
     name: "{{ node.vm_name }}"
     state: running
 
+# node.ip_address doesn't exist for single-primary-prp (Test Case 3) -
+# there, prp0 (node.prp_ip_address) is the only address the node has.
 - name: "[{{ node.vm_name }}] Add API and Ingress entries to /etc/hosts"
   ansible.builtin.lineinfile:
     path: /etc/hosts
     # /etc/hosts has no wildcard support - "*.apps..." here is a silent
     # no-op, not a wildcard match. List every route host actually needed
     # (console/download/oauth) explicitly instead.
-    line: "{{ node.ip_address }} api.{{ node.hostname }}.{{ sno_domain }} console-openshift-console.apps.{{ node.hostname }}.{{ sno_domain }} downloads-openshift-console.apps.{{ node.hostname }}.{{ sno_domain }} oauth-openshift.apps.{{ node.hostname }}.{{ sno_domain }}"
-    regexp: "^{{ node.ip_address }}"
+    line: "{{ node.ip_address | default(node.prp_ip_address) }} api.{{ node.hostname }}.{{ sno_domain }} console-openshift-console.apps.{{ node.hostname }}.{{ sno_domain }} downloads-openshift-console.apps.{{ node.hostname }}.{{ sno_domain }} oauth-openshift.apps.{{ node.hostname }}.{{ sno_domain }}"
+    regexp: "^{{ node.ip_address | default(node.prp_ip_address) }}"
     state: present

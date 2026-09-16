@@ -1,0 +1,27 @@
+# Day-0 delivery of the same MachineConfig proven working as a Day-2
+# manifest in day2-manifests/04-hsr-module-autoload.yaml - here it's
+# picked up automatically by `openshift-install agent create image` from
+# <install_dir>/openshift/*.yaml, so the module is available from the
+# very first boot instead of arriving via a later MCO reboot.
+#
+# This makes the hsr module *available*; it does NOT by itself make
+# NetworkManager use it - see docs/spec-test-case-3-prp-primary.md and
+# docs/prp-test-case.md for the actual Day-0 serializer bug this test
+# case is checking for.
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  name: 99-hsr-module-autoload
+  labels:
+    machineconfiguration.openshift.io/role: master
+spec:
+  config:
+    ignition:
+      version: 3.2.0
+    storage:
+      files:
+        - path: /etc/modules-load.d/hsr.conf
+          mode: 0644
+          overwrite: true
+          contents:
+            source: data:;base64,aHNy

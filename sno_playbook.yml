@@ -5,6 +5,7 @@
   become: true
   vars_files:
     - vars/main.yml
+    - "vars/topologies/{{ sno_topology }}.yml"
 
   tasks:
     - name: Install required packages
@@ -46,7 +47,7 @@
     - name: Allow SNO nodes to query this host's chronyd for NTP
       ansible.builtin.lineinfile:
         path: /etc/chrony.conf
-        line: "allow {{ ocp_public_subnet_cidr }}"
+        line: "allow {{ sno_machine_network_cidr }}"
         insertafter: EOF
         state: present
       notify: Restart chronyd

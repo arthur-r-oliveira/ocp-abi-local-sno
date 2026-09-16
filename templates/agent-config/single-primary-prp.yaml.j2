@@ -1,0 +1,81 @@
+apiVersion: v1alpha1
+kind: AgentConfig
+metadata:
+  name: {{ node.hostname }}
+# prp0 is the ONLY interface with an address in this topology - there is
+# no separate ocp-public NIC to rendezvous on.
+rendezvousIP: {{ node.prp_ip_address }}
+additionalNTPSources:
+  - {{ prp_lan_a_nat_gateway }}
+hosts:
+  - hostname: {{ node.hostname }}.{{ sno_domain }}
+    interfaces:
+      - name: eth0
+        macAddress: "{{ node_macs.eth0 }}"
+      - name: eth1
+        macAddress: "{{ node_macs.eth1 }}"
+    rootDeviceHints:
+      deviceName: /dev/vda
+    networkConfig:
+      interfaces:
+        # eth0/eth1 are the PRP LRE ports - no IP of their own, same
+        # shared-MAC reasoning as dual-sidecar-prp.yaml.j2.
+        - name: eth0
+          type: ethernet
+          state: up
+          mac-address: "{{ node.prp_mac_address }}"
+          ipv4:
+            enabled: false
+          ipv6:
+            enabled: false
+        - name: eth1
+          type: ethernet
+          state: up
+          mac-address: "{{ node.prp_mac_address }}"
+          ipv4:
+            enabled: false
+          ipv6:
+            enabled: false
+        # THE central difference from dual-sidecar-prp.yaml.j2: prp0
+        # carries the node's primary IP/default route/DNS here, not a
+        # separate eth0. OVN-Kubernetes's configure-ovs.sh follows
+        # whichever interface holds the default route and converts it
+        # into br-ex - so br-ex should form on top of prp0 automatically,
+        # with no separate br-ex NMState stanza. Unverified in practice
+        # until this test case actually runs - see
+        # docs/spec-test-case-3-prp-primary.md.
+        #
+        # KNOWN, ALREADY-CONFIRMED BUG (both OCP 4.19.45 and 5.0.0-rc.2):
+        # this exact hsr/prp0 declaration validates fine but does not
+        # survive the installer's embedded nmstate-to-NetworkManager
+        # translation - see docs/prp-test-case.md's root-cause writeup.
+        # Because prp0 is the PRIMARY interface in this topology (unlike
+        # the side-network case), that bug reproducing here likely means
+        # the node gets no network at all, not just a missing side
+        # interface. Per docs/spec-test-case-3-prp-primary.md, that is a
+        # bug to escalate, not an accepted outcome.
+        - name: prp0
+          type: hsr
+          state: up
+          hsr:
+            port1: eth0
+            port2: eth1
+            multicast-spec: {{ prp_multicast_spec }}
+            protocol: prp
+          ipv4:
+            enabled: true
+            dhcp: false
+            address:
+              - ip: {{ node.prp_ip_address }}
+                prefix-length: {{ prp_prefix_length }}
+          ipv6:
+            enabled: false
+      dns-resolver:
+        config:
+          server:
+            - {{ prp_lan_a_nat_gateway }}
+      routes:
+        config:
+          - destination: 0.0.0.0/0
+            next-hop-address: {{ prp_lan_a_nat_gateway }}
+            next-hop-interface: prp0
