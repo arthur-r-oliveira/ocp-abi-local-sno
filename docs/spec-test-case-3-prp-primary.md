@@ -1,7 +1,9 @@
 # Spec: Test Case 3 — PRP as the Primary Network Under br-ex
 
-**Status: DRAFT — not yet implemented. This is a design spec for review before
-any code changes.**
+**Status: IMPLEMENTED AND RUN. Result: Outcome A (installation does not
+work out of the box) - confirmed, see "Result" at the end of this document.
+Per the decision recorded there, this is now an open bug to escalate, not
+a closed test case.**
 
 ## Why this test case is different from Test Case 2
 
@@ -333,10 +335,11 @@ case as complete.
    appears in the console's `ip link` equivalent boot messages, that's
    Outcome A - stop, capture the console log as evidence, don't wait out
    the full timeout for nothing.
-4. If Outcome A: document it in `docs/prp-test-case.md` as a new, explicit
-   confirmed finding (same bug, higher-stakes context) - this is a
-   legitimate, valuable negative result showing why Test Case 2's
-   Day-2-operator approach isn't optional once PRP is your primary network.
+4. If Outcome A: this is a bug, not a documented limitation - follow the
+   "Escalation plan" above. It's still worth noting *why* Test Case 2's
+   Day-2-operator fix isn't a usable workaround here (there's no operator
+   in this context) when writing that report up, but the report's
+   purpose is to get this fixed, not to explain it away.
 5. If Outcome B: run the full failover suite (extend
    `scripts/test-prp-failover.sh` with a `single-primary-prp` mode that
    checks `oc get nodes`/API reachability across the cut, not just a ping),
@@ -360,3 +363,65 @@ None outstanding - see "Resolved" below.
 - **What Outcome A means**: installation must work out of the box. If it
   doesn't, that's a bug to escalate (see "Escalation plan" above), not an
   accepted/documented limitation to close the test case out with.
+
+---
+
+## Result: Outcome A, confirmed
+
+Deployed for real with `sno_topology: single-primary-prp` against this
+repo's implementation (`vm-definition/single-primary-prp.xml.j2`,
+`agent-config/single-primary-prp.yaml.j2`, `day0-manifests/99-hsr-module-autoload.yaml.j2`,
+the new `prp-lan-a-nat`/`prp-lan-b-nat` networks). Playbook run itself
+completed cleanly (`failed=0`) - the failure is entirely inside the
+booted node, not the deployment tooling.
+
+**The node never obtained network connectivity.** Serial console produced
+no output (RHCOS's agent ISO appears to target the VGA console only here,
+not `ttyS0`, so `virsh console`/PTY capture came back empty - a real
+follow-up if console logging is wanted for this topology going forward:
+add `console=ttyS0` to the kernel args, or capture over VNC as done here).
+VNC framebuffer screenshots (`docs/evidence/test-case-3-network-failure-*.png`),
+taken ~30+ seconds apart and identical in substance, show the agent
+installer's own network pre-flight screen reporting total failure:
+
+```
+Check Errors
+Get "https://quay.io": dial tcp: lookup quay.io on [::1]:53: read udp [::1]:...: connection refused
+ping failure:
+ping: quay.io: Name or service not known
+nslookup failure:
+:: communications error to ::1#53: connection refused
+:: communications error to 127.0.0.1#53: connection refused
+:: no servers could be reached
+```
+
+No DNS, no ping, no HTTP - consistent with **no interface on the node
+having an IP address at all**, which is exactly what "`prp0` never
+materializes" predicts here: `eth0`/`eth1` are deliberately IP-less in
+this topology's NMState config (`ipv4.enabled: false` - `prp0` was
+supposed to be the only address-bearing interface), so if `prp0` doesn't
+come up, nothing does.
+
+**Honest scope of this evidence**: unlike Test Case 2's Day-0 investigation
+(`docs/prp-test-case.md`), this run could not directly inspect the
+generated `prp0.nmconnection` file or `journalctl` output - there is no
+network path to SSH in, and the live ISO never reached its "write image to
+disk" stage (so nothing landed on the qcow2 disk to inspect after the
+fact either). What's confirmed **directly, from this run**: total loss of
+connectivity, stable across repeated checks. What's **inferred, not
+re-proven here**: that the cause is the same Day-0 nmstate-to-NetworkManager
+serializer bug already directly confirmed (missing `[hsr]` section,
+`NetworkManager` refusing to load the resulting keyfile) on this exact
+OCP version with the same `AgentConfig` schema, in Test Case 2. That
+inference is well-supported (same version, same schema, exactly the
+predicted symptom) but is not itself a second independent proof.
+
+**Per the decision recorded above, this closes as an open bug, not a
+documented finding.** Escalation report content, following the "Escalation
+plan" section: OCP version `5.0.0-rc.2`, the exact `agent-config.yaml`
+`networkConfig` block from `templates/agent-config/single-primary-prp.yaml.j2`,
+the two screenshots in `docs/evidence/`, and a pointer to Test Case 2's
+direct keyfile-level evidence in `docs/prp-test-case.md` for the root-cause
+mechanism. Filing this into an actual tracker (Bugzilla/GitHub/support
+case) is still a decision for whoever owns that relationship - drafted,
+not filed, by this repo.

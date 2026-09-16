@@ -81,7 +81,7 @@
 - name: "[{{ node.vm_name }}] Configure static DHCP entry"
   when: topology_needs_static_dhcp | default(true)
   block:
-    - name: "[{{ node.vm_name }}] Get current '{{ topology_static_dhcp_network }}' network configuration"
+    - name: "[{{ node.vm_name }}] Get current '{{ topology_static_dhcp_network | default('n/a') }}' network configuration"
       community.libvirt.virt_net:
         command: get_xml
         name: "{{ topology_static_dhcp_network }}"
@@ -101,7 +101,7 @@
       register: modified_net_xml
       changed_when: current_net_xml.get_xml != modified_net_xml.xmlstring
 
-    - name: "[{{ node.vm_name }}] Apply updated '{{ topology_static_dhcp_network }}' network configuration"
+    - name: "[{{ node.vm_name }}] Apply updated '{{ topology_static_dhcp_network | default('n/a') }}' network configuration"
       community.libvirt.virt_net:
         command: define
         name: "{{ topology_static_dhcp_network }}"
