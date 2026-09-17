@@ -77,6 +77,19 @@
   ansible.builtin.command:
     cmd: "openshift-install agent create image --dir={{ node.install_dir }} --log-level=debug"
     creates: "{{ node.install_dir }}/agent.x86_64.iso"
+  register: iso_result
+
+# This topology has no other way to see what happened on first boot if the
+# node never gets an IP (no SSH, no oc) - RHCOS's default agent ISO kernel
+# args only enable the VGA console, so virsh console/serial capture comes
+# back empty. Adding ttyS0 here is what lets docs/spec-test-case-3-prp-primary.md's
+# open question (installer serializer bug vs. a Day-0-manifest/module-load
+# ordering issue) actually get resolved with direct evidence next time this
+# topology fails, instead of staying an inference.
+- name: "[{{ node.vm_name }}] Add serial console kernel args for boot-time debugging"
+  ansible.builtin.command:
+    cmd: "coreos-installer iso kargs modify -a 'console=tty0 console=ttyS0,115200n8' {{ node.install_dir }}/agent.x86_64.iso"
+  when: (topology_needs_serial_console_debug | default(false)) and iso_result.changed
 
 - name: "[{{ node.vm_name }}] Configure static DHCP entry"
   when: topology_needs_static_dhcp | default(true)
