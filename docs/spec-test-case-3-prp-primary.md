@@ -20,8 +20,10 @@ substation/rail deployment (protecting the link that matters, not a side
 channel), and it is a fundamentally higher-stakes test than Test Case 2.
 
 **This spec's central hypothesis, stated up front**: the same Day-0 installer
-bug documented in `docs/prp-test-case.md` (the embedded nmstate→NetworkManager
-serializer drops HSR-specific fields) almost certainly reproduces here,
+bug documented in `docs/prp-test-case.md` (nmstate's offline
+configuration-generation code path drops HSR-specific fields when writing
+the NetworkManager keyfile - see that doc's "Root cause" section for the
+exact source-level trace) almost certainly reproduces here,
 because this test case deliberately avoids the one fix that works
 (`kubernetes-nmstate-operator`, Day-2). Loading the `hsr` kernel module ahead
 of time (requirement 2 below) does **not** work around that bug - Network
@@ -297,24 +299,27 @@ putting PRP under br-ex.
 
 ### Escalation plan (useful to have ready either way)
 
-1. Capture the exact same class of evidence already gathered for Test Case
-   2's Day-0 failure (`docs/prp-test-case.md`'s "Root cause" section) but
-   for *this* scenario specifically: the generated `prp0.nmconnection`
-   missing its `[hsr]` section, the NetworkManager `invalid connection: hsr:
-   setting required` warning from the console log, and confirmation that no
-   interface ever obtained an IP (console-captured `ip addr`/`nmcli`
-   output, since there's no SSH path to get it live).
-2. Write up a minimal, self-contained reproduction: OCP version, the exact
-   `agent-config.yaml` `networkConfig` block used, and the resulting broken
-   keyfile - anyone with an agent-based install and two ethernet ports
-   should be able to reproduce it without this repo's PRP-specific context.
-3. File it upstream against `nmstate`/`openshift-install`'s agent-based
-   installer (the embedded nmstate-to-NetworkManager translator is the
-   component at fault - see `docs/prp-test-case.md`'s root-cause writeup)
-   and/or as a Red Hat support case, referencing that `kubernetes-nmstate`
-   Day-2 is a known workaround but Day-0-only is not currently viable for
-   any topology where the HSR/PRP interface carries primary node
-   connectivity.
+1. ~~Capture the exact same class of evidence already gathered for Test
+   Case 2's Day-0 failure~~ - **done**, via the `rd.break` dracut-shell
+   investigation above: node-local `nmstateconfig.yaml`/`prp0.nmconnection`
+   comparison, confirming the same defect shape directly on this topology.
+2. ~~Write up a minimal, self-contained reproduction~~ - **done, and
+   sharper than originally planned**: traced to the exact `nmstate` source
+   function responsible (`NmConnection::to_keyfile()`, missing an `hsr`
+   branch that every comparable settings type has), and reproduced with
+   plain `nmstatectl gc` alone - no agent-based install, KVM, or OpenShift
+   needed at all. See `docs/prp-test-case.md`'s "Root cause" section.
+3. File it upstream against **`nmstate`** specifically (not
+   `openshift-install`/assisted-service - they're downstream consumers of
+   a real gap in nmstate's offline configuration-generation feature, not
+   the origin of it; confirmed the gap is still open on nmstate's own
+   current upstream branch). A paste-ready issue template exists, kept
+   private (not in this public repo, since it names internal
+   infrastructure) - ask whoever holds this repo's context if you need it.
+   Also worth a Red Hat support case referencing that `kubernetes-nmstate`
+   Day-2 is a known workaround but structurally can't apply to any
+   topology where the HSR/PRP interface carries primary node connectivity
+   (no reachable node/API for the operator to target).
 4. This repo will draft that report's content when Outcome A is confirmed;
    filing it into whatever tracker (Bugzilla, GitHub, a support case) is a
    decision for whoever owns that relationship, not something to file

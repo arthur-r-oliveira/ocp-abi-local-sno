@@ -42,10 +42,34 @@ generated from `templates/agent-config.yaml.j2`) declares `prp0` correctly:
 
 This **validates successfully** at ISO-build time (`nmstatectl gc` on the
 build host, nmstate 2.2.60, accepts the schema and even correctly rejects a
-first, wrong attempt at the config - see below). But `openshift-install`
-embeds its own, different, older nmstate-to-NetworkManager-keyfile
-translator, and **that** translator silently drops every HSR-specific
-field. Confirmed identically on **both OCP 4.19.45 and 5.0.0-rc.2** - the
+first, wrong attempt at the config - see below). **Update - this is not a
+version-mismatch between two different translators, as originally
+theorized below.** Feeding the exact same NMState input directly to the
+stock `nmstatectl gc` on this same build host - no `openshift-install`
+involved at all - reproduces the identical broken output. `openshift-install`
+generates its Day-0 config the same way `nmstatectl gc` does, and inherits
+a real gap in **that specific nmstate code path**: confirmed by reading
+`nmstate`'s own source (cloned at the exact installed tag, `v2.2.60`),
+`NmConnection::to_keyfile()` (`rust/src/lib/nm/nm_dbus/gen_conf/conn.rs`) -
+the function that turns a built connection into a `.nmconnection` keyfile
+for offline/`gen_conf` use - has an explicit branch for every other special
+settings type (`bond`, `bridge`, `vlan`, `vxlan`, `sriov`, `macsec`, `vrf`,
+`veth`, `vpn`, `infiniband`, ...) but none for `hsr`, and there's no
+`hsr.rs` at all under `nm_dbus/gen_conf/`, unlike every type just listed.
+The in-memory model itself is correct in both modes (`settings/hsr.rs`
+populates `port1`/`port2`/`multicast_spec`/`prp` regardless of mode) - only
+this one keyfile-writing function skips it. The D-Bus-facing equivalent
+(`nm_dbus/connection/hsr.rs`, used when applying live rather than writing a
+file) already handles it correctly, which is exactly why `nmcli` and the
+Day-2 `kubernetes-nmstate-operator` fix below both work: neither of them
+ever calls the function with the gap. Confirmed still open on nmstate's own
+upstream `base` branch as of 2026-09-17 (commit `70fa58c`) - not yet fixed
+anywhere, packaged or otherwise. Full trace, minimal standalone repro, and
+a ready-to-file upstream issue template: kept private (not in this public
+repo, since it names internal infrastructure) - ask whoever holds this
+repo's context if you need it filed.
+
+Confirmed identically on **both OCP 4.19.45 and 5.0.0-rc.2** - the
 resulting on-disk connection profile has `type=hsr` but no `[hsr]` section
 at all:
 
@@ -71,11 +95,11 @@ $ ip -d link show prp0
 Device "prp0" does not exist.
 ```
 
-This is a version-mismatch bug between the *validating* nmstate (correct,
-newer) and the *serializing* one embedded in the installer binary
-(older, drops fields it doesn't recognize) - not something fixable by
-changing the YAML schema further, and evidently not yet fixed as of this
-5.0 release candidate.
+This is a real gap in `nmstate`'s offline configuration-generation feature
+itself - not something fixable by changing the YAML schema further, not a
+version mismatch between two different tools, and not specific to either
+OCP release tested here (both just inherit whatever `nmstate` build they
+carry for Day-0 ISO generation).
 
 ### An earlier wrong attempt, and what it taught us
 
