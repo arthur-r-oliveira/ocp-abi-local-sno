@@ -1,7 +1,8 @@
 # Spec: Test Case 3 — PRP as the Primary Network Under br-ex
 
 **Status: IMPLEMENTED AND RUN. Result: Outcome A (installation does not
-work out of the box) - confirmed, see "Result" at the end of this document.
+work out of the box) - directly confirmed with node-local evidence (not
+just inferred from Test Case 2), see "Result" at the end of this document.
 Worth reporting upstream (see "Escalation plan"), but not a hard blocker -
 see "What Outcome A means" below for the actual priority.**
 
@@ -28,7 +29,7 @@ Manager never even attempts `ip link add type hsr` if the connection profile
 it's given has no `[hsr]` section, so the module being resident in memory is
 necessary but not sufficient.
 
-**Working out of the box here is a "good to have" from the partner's
+**Working out of the box here is a "good to have" from a production-deployment
 perspective, not a hard requirement** - if this hypothesis is right and it
 doesn't work, that's worth reporting upstream, but it isn't a blocker for
 anything else in this repo. See "Two possible outcomes" below for what
@@ -109,9 +110,9 @@ No `ocp-public` NIC at all in this mode - connectivity to the node exists
 ### `prp-lan-a`/`prp-lan-b` connectivity: NAT, by design, for this PoC
 
 **Decided**: this is a lab sandbox PoC. Physical dual-path redundancy (two
-real cable runs, two real switches) is explicitly the end customer's job to
-validate later on official hardware - not something this environment needs
-to simulate. Real PRP puts LAN A and LAN B on the same destination network
+real cable runs, two real switches) is explicitly out of scope here - that's
+the eventual production deployment's job to validate later on official
+hardware, not something this environment needs to simulate. Real PRP puts LAN A and LAN B on the same destination network
 via two physically independent paths; here, both `prp-lan-a` and
 `prp-lan-b` are independent NAT libvirt networks sharing this host's one
 connected uplink (`eno1`) underneath. That's sufficient and correct for
@@ -128,7 +129,8 @@ difference worth distinct file names), each a NAT network like
 State this scope plainly wherever this test case's results get presented:
 this PoC proves the mechanism works (or doesn't - see "Two possible
 outcomes"); it does not, and isn't meant to, prove physical redundancy.
-That's the customer's hardware validation to do, not a gap in this PoC.
+That's the eventual production deployment's hardware validation to do, not
+a gap in this PoC.
 
 ### `install-config.yaml`/`agent-config.yaml` implications
 
@@ -264,8 +266,8 @@ confirmation of this mechanism happens if/when Phase 2 below is reached.
 
 ## Two possible outcomes
 
-Working out of the box here is a **"good to have" from the partner's
-perspective, not a hard requirement** - this is not a gating decision for
+Working out of the box here is a **"good to have" from a
+production-deployment perspective, not a hard requirement** - this is not a gating decision for
 anything else in this repo. What it does mean: if Outcome A happens, that's
 worth reporting upstream so it can get fixed for whoever eventually wants
 this topology working, rather than silently filed away as an accepted
@@ -356,14 +358,15 @@ None outstanding - see "Resolved" below.
 ## Resolved
 
 - **LAN-A/B connectivity**: NAT, sharing this host's one connected uplink.
-  Physical dual-path redundancy is explicitly the end customer's job on
-  official hardware later, not something this PoC needs to simulate. See
+  Physical dual-path redundancy is explicitly out of scope here - that's
+  the eventual production deployment's job on official hardware later, not
+  something this PoC needs to simulate. See
   "`prp-lan-a`/`prp-lan-b` connectivity" above.
 - **Directory refactor scope**: yes, now - implemented alongside Test Case
   3, as its own commit, verified against `scripts/test-prp-failover.sh`
   before Test Case 3 content landed on top.
 - **What Outcome A means**: working out of the box here is a good to have
-  from the partner's perspective, not a hard requirement. Worth reporting
+  from a production-deployment perspective, not a hard requirement. Worth reporting
   upstream if it doesn't (see "Escalation plan" above), but this isn't a
   blocker, and Outcome A is a legitimate result, not a failed test.
 
@@ -405,19 +408,76 @@ this topology's NMState config (`ipv4.enabled: false` - `prp0` was
 supposed to be the only address-bearing interface), so if `prp0` doesn't
 come up, nothing does.
 
-**Honest scope of this evidence**: unlike Test Case 2's Day-0 investigation
-(`docs/prp-test-case.md`), this run could not directly inspect the
-generated `prp0.nmconnection` file or `journalctl` output - there is no
-network path to SSH in, and the live ISO never reached its "write image to
-disk" stage (so nothing landed on the qcow2 disk to inspect after the
-fact either). What's confirmed **directly, from this run**: total loss of
-connectivity, stable across repeated checks. What's **inferred, not
-re-proven here**: that the cause is the same Day-0 nmstate-to-NetworkManager
-serializer bug already directly confirmed (missing `[hsr]` section,
-`NetworkManager` refusing to load the resulting keyfile) on this exact
-OCP version with the same `AgentConfig` schema, in Test Case 2. That
-inference is well-supported (same version, same schema, exactly the
-predicted symptom) but is not itself a second independent proof.
+**Update - directly confirmed, not just inferred.** The initial run above
+could not inspect the node directly (no network path to SSH in), so the
+root cause was originally inferred from Test Case 2's evidence rather than
+proven for this topology. Closed that gap with a targeted follow-up: added
+`console=tty0 console=ttyS0,115200n8` to the ISO's kernel args
+(`topology_needs_serial_console_debug` in
+`vars/topologies/single-primary-prp.yml`, applied by a new task in
+`tasks/deploy_node.yml` via `coreos-installer iso kargs modify`) to get
+real boot-time serial output, then, on a second boot, manually added
+`rd.break=pre-pivot` to drop into dracut's emergency shell **after ignition
+writes its files to `/sysroot` but before the real root switches in** -
+early enough that neither NetworkManager nor the `hsr` kernel module have
+run yet, which matters: it rules out a module-load-timing explanation for
+this topology's failure, not just the embedded-serializer one.
+
+From that shell, `/sysroot/etc/assisted/manifests/nmstateconfig.yaml` (the
+source `NMStateConfig`, i.e. the input to whatever generates the
+NetworkManager profile) has a complete, correct `hsr:` block:
+```yaml
+    - hsr:
+        multicast-spec: 0
+        port1: eth0
+        port2: eth1
+        protocol: prp
+      ipv4:
+        address:
+        - ip: 192.168.140.50
+          prefix-length: 24
+        dhcp: false
+        enabled: true
+      ipv6:
+        enabled: false
+      name: prp0
+      state: up
+      type: hsr
+```
+but `/sysroot/etc/assisted/network/host0/prp0.nmconnection` - the staged
+keyfile `nmstate.service` will hand to NetworkManager at real boot - has
+`type=hsr` and **no `[hsr]` section at all**:
+```ini
+[connection]
+autoconnect=true
+autoconnect-slaves=1
+id=prp0
+interface-name=prp0
+type=hsr
+uuid=fcd9e789-3883-51eb-aa9c-64012cfee9af
+autoconnect-priority=1
+[ipv4]
+address0=192.168.140.50/24
+...
+[ethernet]
+cloned-mac-address=52:54:00:AA:AA:10
+```
+No `[hsr]` stanza, no `port1`/`port2`, nothing. This is a **static artifact
+already broken inside the ISO before the VM ever boots** - confirmed
+directly on this exact topology, not inferred from Test Case 2. It also
+settles the alternative explanation worth ruling out (a Day-0
+manifest-injection or kernel-module-load-ordering problem, rather than the
+translator itself): irrelevant here, since the keyfile is already missing
+the required section regardless of module timing - even a perfectly-timed
+`hsr` module load could not make NetworkManager honor settings that were
+never written.
+
+What's confirmed **directly, from this run**: total loss of connectivity
+at the installer's network pre-flight check (stable across repeated
+checks), **and** the generated `prp0.nmconnection` keyfile missing its
+`[hsr]` section despite a correct source `NMStateConfig` - the same defect
+shape as Test Case 2's directly-confirmed finding, now independently
+reproduced on this topology rather than assumed from it.
 
 This closes the test case as **complete, with a reportable-but-not-blocking
 finding** - working out of the box is a good to have here, not a hard
@@ -425,8 +485,10 @@ requirement (see "What Outcome A means"). A ready-to-file writeup exists,
 kept private (not in this public repo): OCP version `5.0.0-rc.2`, the exact
 `agent-config.yaml` `networkConfig` block from
 `templates/agent-config/single-primary-prp.yaml.j2`, the two screenshots
-in `docs/evidence/`, and a pointer to Test Case 2's direct keyfile-level
-evidence in `docs/prp-test-case.md` for the root-cause mechanism. Filing
-it into an actual tracker (Bugzilla/GitHub/support case) remains a
+in `docs/evidence/`, the node-local `nmstateconfig.yaml`/`prp0.nmconnection`
+comparison captured via the `rd.break` dracut shell above, and a pointer to
+Test Case 2's direct keyfile-level evidence in `docs/prp-test-case.md` for
+the root-cause mechanism. Filing it into an actual tracker
+(Bugzilla/GitHub/support case) remains a
 decision for whoever owns that relationship, and isn't required for this
 test case to be considered done.
