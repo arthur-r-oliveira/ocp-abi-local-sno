@@ -40,8 +40,9 @@ two dedicated to PRP - nothing shared between roles.
 | `sno_playbook.yml`, `tasks/deploy_node.yml`, `vars/main.yml` | The Ansible playbook - libvirt networks, VM definitions, ignition/agent-config generation, one loop iteration per node in `vars/main.yml`'s `sno_nodes` list |
 | `templates/` | Jinja templates for the 3 libvirt networks, the VM domain XML, and the agent-based installer's `install-config.yaml`/`agent-config.yaml` |
 | `day2-manifests/` | Applied via `oc apply` **after** `install-complete`, once per cluster - installs `kubernetes-nmstate-operator` and configures `prp0` via `NodeNetworkConfigurationPolicy`. Not part of the ansible run; see docs/prp-test-case.md for why this has to be Day-2 |
-| `scripts/` | `add-cluster-hosts.sh` (per-node `/etc/hosts` entries), `prp-lab-tunnel.sh` (an `sshuttle` tunnel scoped to `ocp-public` only, for reaching the VMs from a workstation that isn't the KVM host), and `test-prp-failover.sh` (the CI test suite - see below) |
-| `.github/workflows/prp-test.yml` | Runs `test-prp-failover.sh` on a self-hosted runner registered on the KVM host - can't run on GitHub's hosted runners, this needs real `virsh`/SSH access to the VMs |
+| `scripts/` | `add-cluster-hosts.sh` (per-node `/etc/hosts` entries), `prp-lab-tunnel.sh` (an `sshuttle` tunnel scoped to `ocp-public` only, for reaching the VMs from a workstation that isn't the KVM host), `wipe-all-sno.sh` (destroys/undefines every VM this repo can create, across every topology - a clean slate), `test-single.sh` / `test-prp-failover.sh` (per-topology health/failover checks - see "Testing" below), and `run-test-matrix.sh` (the CI entry point: wipe, run Test Case 1, wipe, run Test Case 2, wipe, report) |
+| `.github/workflows/prp-test.yml` | Runs `test-prp-failover.sh` against an **already-deployed** dual-sidecar-prp cluster - an ongoing health check, not a deploy |
+| `.github/workflows/sno-test-matrix.yml` | Runs `run-test-matrix.sh`: wipes everything, deploys and tests Test Case 1 and Test Case 2 from scratch, wiping between and after each. Both workflows need a self-hosted runner registered on the KVM host (label `kvm-prp-lab`) - can't run on GitHub's hosted runners, this needs real `virsh`/SSH access to the VMs |
 | `docs/` | The real documentation - read this, not this file |
 
 ## Quick start
@@ -67,12 +68,26 @@ Full details, exact commands, and real output from an actual run: **docs/install
 
 ## Testing
 
+Per-topology checks, each exits non-zero on any failure:
+
 ```
-./scripts/test-prp-failover.sh
+./scripts/test-single.sh          # Test Case 1: cluster health only, no PRP
+./scripts/test-prp-failover.sh    # Test Case 2: health + prp0 mode + reachability +
+                                   #              a real hypervisor-level failover cut
 ```
-Checks both clusters' health, confirms `prp0` is up in true PRP mode on
-both nodes, verifies cross-node reachability, then actually cuts
-`prp-lan-a` at the hypervisor level mid-ping and asserts **0% packet
-loss**. Exits non-zero on any failure - wired into CI via
-`.github/workflows/prp-test.yml` (self-hosted runner only; GitHub's
-hosted runners have no `virsh`).
+
+For the full "start from nothing, prove it, clean up" cycle:
+
+```
+./scripts/run-test-matrix.sh
+```
+Wipes every known SNO VM, deploys and tests Test Case 1, wipes, deploys
+and tests Test Case 2, wipes again, and writes a markdown report
+(default: `/tmp/sno-test-matrix-report.md`). This is what
+`.github/workflows/sno-test-matrix.yml` runs in CI - budget a couple of
+hours; `openshift-install`'s own internal timeouts alone allow up to
+~70 minutes per node.
+
+**TNF (Two-Node with Fencing) is not in this matrix yet** - it needs its
+own design pass (a different install flow, a virtual BMC, an external
+load balancer) before it can be automated the same way.
