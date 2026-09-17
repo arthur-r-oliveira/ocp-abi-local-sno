@@ -18,7 +18,11 @@
 # Usage: ./prp-lab-tunnel.sh [ssh-user@]kvm-host
 
 set -euo pipefail
-REMOTE="${1:-root@hpe-ml350gen9-01.khw.eng.rdu2.dc.redhat.com}"
+if [ -z "${1:-}" ]; then
+  echo "Usage: $0 [ssh-user@]kvm-host" >&2
+  exit 1
+fi
+REMOTE="$1"
 SUBNET="192.168.130.0/24"
 
 if ! command -v sshuttle >/dev/null 2>&1; then
