@@ -1,0 +1,44 @@
+# Wipes every known SNO VM, then runs Test Case 1 (single) and Test
+# Case 2 (dual-sidecar-prp) back to back - wiping between and after each
+# - and publishes a markdown report. See scripts/run-test-matrix.sh for
+# the actual logic; this workflow is a thin wrapper around it.
+#
+# TNF (Two-Node with Fencing) is intentionally NOT part of this matrix
+# yet - it needs its own design pass first (a different install flow, a
+# virtual BMC, an external load balancer). See
+# docs/spec-test-case-3-prp-primary.md's sibling spec once that lands.
+#
+# Cannot run on GitHub's hosted runners - this needs real virsh/SSH
+# access to libvirt VMs, which only exist on the KVM host itself. Needs
+# a self-hosted runner registered on that host with the "kvm-prp-lab"
+# label (same one .github/workflows/prp-test.yml uses) - swap the label
+# below if you registered it differently.
+#
+# Each test case can legitimately take up to ~70 minutes to bootstrap
+# and roll out operators (openshift-install's own internal timeouts:
+# 40m for bootstrap, 30m for operators) - budget for a multi-hour run,
+# hence the generous job-level timeout below.
+name: SNO test matrix (wipe + single + dual-sidecar-prp)
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  test-matrix:
+    runs-on: [self-hosted, kvm-prp-lab]
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the wipe + test-case matrix
+        run: ./scripts/run-test-matrix.sh "${{ runner.temp }}/sno-test-matrix-report.md"
+
+      - name: Upload report and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sno-test-matrix-report
+          path: |
+            ${{ runner.temp }}/sno-test-matrix-report.md
+            /tmp/sno-test-matrix-logs/**
+          retention-days: 30
