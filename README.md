@@ -32,6 +32,10 @@ two dedicated to PRP - nothing shared between roles.
 - **[docs/prp-hackathon-report.html](docs/prp-hackathon-report.html)** - a
   standalone, self-contained visual summary of the above (open directly in a
   browser) - built for sharing outside the repo.
+- **[docs/upstream-issue-1-nmstate-hsr-gen-conf.md](docs/upstream-issue-1-nmstate-hsr-gen-conf.md)** /
+  **[docs/upstream-issue-2-agent-based-installer-hsr.md](docs/upstream-issue-2-agent-based-installer-hsr.md)** -
+  paste-ready draft issues for the actual bug (nmstate) and the downstream
+  tracking issue (Agent-Based Installer), not yet filed.
 
 ## Layout
 
