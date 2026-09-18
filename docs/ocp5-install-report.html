@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OCP 5 Install Report</title>
+<meta name="description" content="Three agent-based-installer topologies on OCP 5.0.0-rc.2 - what passed, what's a confirmed installer bug, and what we learned running three SNO VMs on one 46GB KVM host." />
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+  :root{
+    --bg:#f5f6f9; --surface:#ffffff; --surface-2:#eceff4;
+    --ink:#12161f; --muted:#565f70; --border:#dde1ea;
+    --accent:#2b4bdb; --accent-ink:#ffffff; --accent-soft:#e8ecfb;
+    --ok:#157f4a; --ok-bg:#e7f5ec;
+    --warn:#a15c00; --warn-bg:#fbf0e0;
+    --bad:#b1291b; --bad-bg:#fbe9e6;
+    --code-bg:#0d1220; --code-ink:#d9e1f2;
+    --shadow: 0 1px 2px rgba(12,16,26,.04), 0 8px 24px -12px rgba(12,16,26,.12);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0a0c12; --surface:#101420; --surface-2:#151b29;
+      --ink:#e8ebf3; --muted:#8b93a8; --border:#232b3d;
+      --accent:#7b93ff; --accent-ink:#0a0c1f; --accent-soft:#161c34;
+      --ok:#4fd08a; --ok-bg:#0f2b20;
+      --warn:#e3ab4f; --warn-bg:#2e2210;
+      --bad:#f0857a; --bad-bg:#2c1512;
+      --code-bg:#060810; --code-ink:#ccd6ee;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 30px -14px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0a0c12; --surface:#101420; --surface-2:#151b29;
+    --ink:#e8ebf3; --muted:#8b93a8; --border:#232b3d;
+    --accent:#7b93ff; --accent-ink:#0a0c1f; --accent-soft:#161c34;
+    --ok:#4fd08a; --ok-bg:#0f2b20;
+    --warn:#e3ab4f; --warn-bg:#2e2210;
+    --bad:#f0857a; --bad-bg:#2c1512;
+    --code-bg:#060810; --code-ink:#ccd6ee;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 30px -14px rgba(0,0,0,.6);
+  }
+
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+    font-size:16px; line-height:1.6;
+    padding-block:0;
+  }
+  img{max-width:100%;}
+  .wrap{max-width:920px; margin:0 auto; padding:52px 20px 100px;}
+  h1,h2,h3,h4{font-family:'IBM Plex Sans', system-ui, sans-serif; text-wrap:balance; margin:0;}
+  code, .mono, table td.num{font-family:'IBM Plex Mono', 'SFMono-Regular', monospace;}
+  p{max-width:70ch;}
+
+  header.hero{display:flex; flex-direction:column; gap:16px; margin-bottom:20px;}
+  .eyebrow{
+    font-family:'IBM Plex Mono', monospace; font-size:12.5px; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--accent); font-weight:600;
+  }
+  h1{font-size:clamp(28px,5vw,40px); font-weight:700; letter-spacing:-.01em;}
+  .pitch{color:var(--muted); font-size:16.5px; max-width:66ch;}
+  .pitch b{color:var(--ink); font-weight:600;}
+
+  .verdicts{display:flex; flex-wrap:wrap; gap:10px; margin-top:6px;}
+  .chip{
+    display:inline-flex; align-items:center; gap:8px;
+    border:1px solid var(--border); background:var(--surface);
+    border-radius:999px; padding:7px 14px 7px 10px; box-shadow:var(--shadow);
+    font-size:13.5px;
+  }
+  .chip .dot{width:8px; height:8px; border-radius:50%; background:var(--ok); flex:none;}
+  .chip.warn .dot{background:var(--warn);}
+  .chip.bad .dot{background:var(--bad);}
+  .chip b{font-weight:600;}
+  .chip .n{color:var(--muted); font-size:12.5px;}
+
+  .meta-row{display:flex; flex-wrap:wrap; gap:18px; color:var(--muted); font-size:13px; font-family:'IBM Plex Mono',monospace; margin-top:4px;}
+
+  section.part{margin-top:56px;}
+  .part-head{display:flex; align-items:baseline; gap:12px; margin-bottom:6px; border-bottom:2px solid var(--accent); padding-bottom:12px;}
+  .part-num{font-family:'IBM Plex Mono',monospace; color:var(--accent); font-weight:600; font-size:14px;}
+  .part-head h2{font-size:22px; font-weight:700;}
+  .part-intro{color:var(--muted); font-size:15px; margin:12px 0 24px; max-width:68ch;}
+
+  h3.claim{font-size:16px; font-weight:600; margin:30px 0 4px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+  p.claim-note{color:var(--muted); font-size:14px; margin:0 0 14px; max-width:68ch;}
+
+  .status{
+    display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600;
+    padding:3px 9px; border-radius:6px; font-family:'IBM Plex Mono',monospace; letter-spacing:.02em;
+  }
+  .status.pass{background:var(--ok-bg); color:var(--ok);}
+  .status.pass::before{content:"✓"; font-weight:700;}
+  .status.flag{background:var(--warn-bg); color:var(--warn);}
+  .status.flag::before{content:"!"; font-weight:700;}
+  .status.bug{background:var(--bad-bg); color:var(--bad);}
+  .status.bug::before{content:"✕"; font-weight:700;}
+
+  .topo-grid{display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:18px 0 8px;}
+  @media (max-width:720px){.topo-grid{grid-template-columns:1fr;}}
+  .topo-card{
+    border:1px solid var(--border); border-radius:12px; background:var(--surface);
+    box-shadow:var(--shadow); padding:16px 16px 14px; display:flex; flex-direction:column; gap:8px;
+  }
+  .topo-card .tname{font-family:'IBM Plex Mono',monospace; font-weight:600; font-size:13.5px;}
+  .topo-card .tspec{color:var(--muted); font-size:12.5px; line-height:1.55;}
+  .topo-card .tspec b{color:var(--ink);}
+
+  .evidence{
+    border:1px solid var(--border); border-radius:10px; background:var(--surface);
+    box-shadow:var(--shadow); overflow:hidden; margin:10px 0 18px;
+  }
+  .evidence .src{
+    display:flex; justify-content:space-between; align-items:center;
+    padding:8px 14px; background:var(--surface-2); border-bottom:1px solid var(--border);
+    font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--muted);
+    letter-spacing:.03em; text-transform:uppercase;
+  }
+  .evidence pre{
+    margin:0; padding:14px 16px; background:var(--code-bg); color:var(--code-ink);
+    font-family:'IBM Plex Mono',monospace; font-size:12.4px; line-height:1.6;
+    overflow-x:auto; white-space:pre;
+  }
+  .evidence pre .g{color:#7fd9a8;}
+  .evidence pre .m{color:#e3ab4f;}
+  .evidence pre .r{color:#f0857a;}
+
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:16px;}
+  @media (max-width:640px){.grid2{grid-template-columns:1fr;}}
+
+  table{width:100%; border-collapse:collapse; font-size:13.5px; margin:14px 0;}
+  table.data{border:1px solid var(--border); border-radius:10px; overflow:hidden; background:var(--surface); box-shadow:var(--shadow); display:block; overflow-x:auto;}
+  table.data table, table.data{display:table;}
+  th,td{padding:9px 12px; text-align:left; border-bottom:1px solid var(--border);}
+  thead th{background:var(--surface-2); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted);}
+  tbody tr:last-child td{border-bottom:none;}
+  td.num{font-variant-numeric:tabular-nums; text-align:right;}
+
+  ul.gotchas{margin:8px 0 0; padding-left:0; list-style:none; display:flex; flex-direction:column; gap:10px;}
+  ul.gotchas li{
+    border:1px solid var(--border); border-radius:10px; background:var(--surface); box-shadow:var(--shadow);
+    padding:12px 14px; font-size:14px;
+  }
+  ul.gotchas li b{display:block; font-size:13.5px; margin-bottom:3px;}
+  ul.gotchas li span.tag{
+    display:inline-block; font-family:'IBM Plex Mono',monospace; font-size:10.5px; letter-spacing:.03em;
+    text-transform:uppercase; color:var(--muted); background:var(--surface-2); border-radius:5px;
+    padding:2px 6px; margin-left:8px;
+  }
+
+  .try-box{
+    border:1px solid var(--border); border-radius:10px; background:var(--accent-soft);
+    padding:18px 20px; margin:24px 0;
+  }
+  .try-box h4{font-size:14px; font-weight:700; color:var(--accent); margin-bottom:8px; text-transform:uppercase; letter-spacing:.03em; font-family:'IBM Plex Mono',monospace;}
+  .try-box ol,.try-box ul{margin:0; padding-left:22px; font-size:14.5px;}
+  .try-box li{margin-bottom:6px;}
+
+  .chart-card{border:1px solid var(--border); border-radius:10px; background:var(--surface); box-shadow:var(--shadow); padding:18px 18px 8px; margin:14px 0 22px;}
+  .chart-card h4{font-size:13.5px; font-weight:600; margin:0 0 2px;}
+  .chart-card .cap{color:var(--muted); font-size:12.5px; margin-bottom:10px;}
+  svg.chart{width:100%; height:auto; display:block; overflow:visible;}
+  .axis-label{font-family:'IBM Plex Mono',monospace; font-size:10px; fill:var(--muted);}
+  .band-label{font-family:'IBM Plex Mono',monospace; font-size:10.5px; fill:var(--bad); font-weight:600;}
+
+  footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--border); color:var(--muted); font-size:12.5px; display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; font-family:'IBM Plex Mono',monospace;}
+
+  ::selection{background:var(--accent); color:var(--accent-ink);}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header class="hero">
+    <div class="eyebrow">Installation Report · Hackathon Reference</div>
+    <h1>Three ways to boot OpenShift 5, one KVM box.</h1>
+    <p class="pitch">
+      We ran the agent-based installer through <b>three</b> Single Node OpenShift topologies on
+      <b>5.0.0-rc.2</b> - a plain SNO, two SNOs cross-wired with a real PRP link, and one SNO with PRP
+      as the <em>primary</em> network underneath <span class="mono">br-ex</span>. Two came up clean.
+      The third surfaced a real installer bug. Along the way we also found - and fixed, live, today -
+      the actual failure mode you get when three SNO VMs share one 46GB host.
+    </p>
+    <div class="verdicts">
+      <span class="chip"><span class="dot"></span><b>single</b><span class="n">Test Case 1 · clean install</span></span>
+      <span class="chip"><span class="dot"></span><b>dual-sidecar-prp</b><span class="n">Test Case 2 · 0% loss failover</span></span>
+      <span class="chip bad"><span class="dot"></span><b>single-primary-prp</b><span class="n">Test Case 3 · installer bug, confirmed node-local</span></span>
+      <span class="chip warn"><span class="dot"></span><b>3 VMs at once</b><span class="n">host RAM oversubscribed → CVO errors</span></span>
+    </div>
+    <div class="meta-row">
+      <span>HOST internal KVM lab (RHEL 10)</span>
+      <span>DATE 2026-09-17</span>
+      <span>OCP 5.0.0-rc.2</span>
+    </div>
+  </header>
+
+  <!-- ============ TOPOLOGIES ============ -->
+  <section class="part">
+    <div class="part-head">
+      <span class="part-num">01</span>
+      <h2>Three topologies, one playbook</h2>
+    </div>
+    <p class="part-intro">
+      One Ansible playbook, selected per run with <span class="mono">-e sno_topology=...</span>. Each
+      topology gets its own libvirt network layout, VM domain XML, and AgentConfig template - nothing
+      is copy-pasted per node, it's templated from <span class="mono">vars/topologies/*.yml</span>.
+    </p>
+
+    <div class="topo-grid">
+      <div class="topo-card">
+        <span class="tname">single</span>
+        <span class="status pass">Test Case 1</span>
+        <div class="tspec">
+          1 node · <b>8 vCPU / 16GB</b><br>
+          1 NIC → <b>ocp-public</b> (API/Ingress/egress)<br>
+          No PRP. Baseline sanity check.
+        </div>
+      </div>
+      <div class="topo-card">
+        <span class="tname">dual-sidecar-prp</span>
+        <span class="status pass">Test Case 2</span>
+        <div class="tspec">
+          2 independent nodes · <b>8 vCPU / 16GB</b> each<br>
+          3 NICs each → ocp-public + <b>prp-lan-a</b> + <b>prp-lan-b</b><br>
+          PRP is a sidecar link between two clusters, not in the cluster network's critical path.
+        </div>
+      </div>
+      <div class="topo-card">
+        <span class="tname">single-primary-prp</span>
+        <span class="status bug">Test Case 3</span>
+        <div class="tspec">
+          1 node · <b>8 vCPU / 16GB</b><br>
+          2 NICs only → <b>prp-lan-a</b> + <b>prp-lan-b</b>, <span class="mono">prp0</span> underlies
+          <span class="mono">br-ex</span> itself<br>
+          PRP is load-bearing for cluster networking, not a sidecar.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ RESULTS ============ -->
+  <section class="part">
+    <div class="part-head">
+      <span class="part-num">02</span>
+      <h2>Results</h2>
+    </div>
+
+    <h3 class="claim">Test Case 1 - single <span class="status pass">PASS</span></h3>
+    <p class="claim-note">Deploy → bootstrap-complete → install-complete → health check, run in isolation today, all clean.</p>
+    <div class="evidence">
+      <div class="src"><span>live shell → deploy, then health check</span></div>
+      <pre>PLAY RECAP **********************************************************
+localhost  : ok=28  changed=10  unreachable=0  <span class="g">failed=0</span>  skipped=5  rescued=0  ignored=0
+
+INFO All cluster operators have completed progressing
+INFO <span class="g">Install complete!</span>
+
+== Single SNO (no PRP) :: test suite ==
+<span class="g">[PASS] cluster-health:sno-single</span> - ClusterVersion Available, all operators healthy
+<span class="g">[PASS] node-ready:sno-single</span> - kubelet Ready
+== Summary: <span class="g">2 passed, 0 failed</span> ==</pre>
+    </div>
+
+    <h3 class="claim">Test Case 2 - dual-sidecar-prp <span class="status pass">PASS</span></h3>
+    <p class="claim-note">
+      Both clusters healthy, PRP running in proper PRP mode (not HSR), and a hypervisor-level link cut
+      on one of the two redundant paths loses <b>zero</b> packets. Full writeup with charts:
+      <span class="mono">docs/prp-hackathon-report.html</span>.
+    </p>
+    <div class="evidence">
+      <div class="src"><span>live shell → scripts/test-prp-failover.sh</span></div>
+      <pre><span class="g">[PASS] cluster-health:sno-a</span> - ClusterVersion Available, all operators healthy
+<span class="g">[PASS] cluster-health:sno-b</span> - ClusterVersion Available, all operators healthy
+<span class="g">[PASS] prp0-mode:sno-a</span> - proto=1 (PRP)
+<span class="g">[PASS] prp0-mode:sno-b</span> - proto=1 (PRP)
+<span class="g">[PASS] prp0-reachability</span> - 0% loss, sno-a -> sno-b over prp0
+<span class="g">[PASS] failover-prp-lan-a</span> - 0% packet loss with prp-lan-a down for 8s
+<span class="g">[PASS] prp-node-table:sno-a</span> - 2 peer entries
+<span class="g">[PASS] prp-node-table:sno-b</span> - 3 peer entries
+== Summary: <span class="g">8 passed, 0 failed</span> ==</pre>
+    </div>
+
+    <h3 class="claim">Test Case 3 - single-primary-prp <span class="status bug">Confirmed installer bug, node-local evidence</span></h3>
+    <p class="claim-note">
+      The Day-0 NMState config for <span class="mono">prp0</span> is schema-valid and builds a clean ISO,
+      but <span class="mono">openshift-install</span>'s embedded nmstate→NetworkManager translator drops
+      the entire <span class="mono">[hsr]</span> section from the generated keyfile. Because PRP is the
+      network underneath <span class="mono">br-ex</span> in this topology (not a sidecar), the node
+      never gets a working network at all - no SSH, no <span class="mono">oc</span>, nothing reachable -
+      so this couldn't originally be verified beyond the installer's own failure screen. Closed that gap:
+      added a serial-console kernel arg plus a one-time <span class="mono">rd.break</span> to drop into
+      the boot's dracut shell <em>after</em> ignition writes its files but <em>before</em> NetworkManager
+      or the <span class="mono">hsr</span> kernel module ever run - early enough to also rule out a
+      module-load-timing explanation, not just confirm the translator one.
+    </p>
+    <div class="grid2">
+      <div class="evidence">
+        <div class="src"><span>rd.break shell → source NMStateConfig (input)</span></div>
+        <pre>$ cat /sysroot/etc/assisted/manifests/nmstateconfig.yaml
+    - <span class="g">hsr:
+        multicast-spec: 0
+        port1: eth0
+        port2: eth1
+        protocol: prp</span>
+      name: prp0
+      state: up
+      type: hsr</pre>
+      </div>
+      <div class="evidence">
+        <div class="src"><span>rd.break shell → staged keyfile (output)</span></div>
+        <pre>$ cat /sysroot/etc/assisted/network/host0/prp0.nmconnection
+[connection]
+type=hsr
+<span class="r">          # no [hsr] section anywhere in the file</span>
+[ipv4]
+address0=192.168.140.50/24
+...</pre>
+      </div>
+    </div>
+    <p class="claim-note">
+      Correct input, broken output, baked into the ISO before the VM ever boots - the same defect shape
+      already confirmed on the sidecar topology, now independently reproduced here rather than assumed
+      from it. One real difference from Test Case 2 worth calling out plainly:
+      <b>there is no Day-2 workaround for this topology.</b> The
+      <span class="mono">kubernetes-nmstate-operator</span> fix that works for Test Case 2 needs a
+      reachable API server to apply its <span class="mono">NodeNetworkConfigurationPolicy</span> - and a
+      node with zero network connectivity has no way to reach one. This is currently a real gap, not
+      just an inconvenience.
+    </p>
+    <p class="claim-note">
+      <b>Outcome, as decided with the team:</b> still not a hard blocker on our plan - out-of-box
+      install for this exact topology is a <em>good to have</em> from a production-deployment
+      perspective, not a requirement, and is worth reporting upstream rather than silently accepted.
+      Full root cause, KB alignment, and evidence:
+      <span class="mono">docs/spec-test-case-3-prp-primary.md</span>, <span class="mono">docs/prp-test-case.md</span>.
+    </p>
+  </section>
+
+  <!-- ============ RESOURCE LESSON (today, live) ============ -->
+  <section class="part">
+    <div class="part-head">
+      <span class="part-num">03</span>
+      <h2>What "8vCPU/16GB × 3" actually costs on a 46GB host</h2>
+    </div>
+    <p class="part-intro">
+      Fresh from today's run, not a retelling: Test Case 1 was deployed <em>alongside</em> the already-running
+      <span class="mono">sno-a</span>/<span class="mono">sno-b</span> pair rather than after wiping them -
+      three SNO VMs at once, ~48GB of combined requested RAM against 46GB of physical host RAM.
+    </p>
+    <h3 class="claim">Symptom: looked like a cluster bug, wasn't one <span class="status flag">resource starvation</span></h3>
+    <div class="evidence">
+      <div class="src"><span>live shell → clusterversion, mid-failure</span></div>
+      <pre>NAME      VERSION      AVAILABLE   PROGRESSING   SINCE   STATUS
+version   5.0.0-rc.2   <span class="r">False</span>       <span class="m">True</span>          64m     <span class="r">Unable to apply 5.0.0-rc.2: an unknown error has occurred: MultipleErrors</span>
+
+$ oc get nodes
+<span class="r">Unable to connect to the server: stream error: stream ID 1; INTERNAL_ERROR; received from peer</span></pre>
+      </div>
+    <table class="data">
+      <thead><tr><th>Moment</th><th>Free RAM</th><th>Swap in use</th><th>API server</th></tr></thead>
+      <tbody>
+        <tr><td>3 VMs running concurrently</td><td class="num">~400-450MB</td><td class="num">4.8 → 5.3GB, climbing</td><td>timing out</td></tr>
+        <tr><td>After wiping down to 2 VMs</td><td class="num">13GB</td><td class="num">633MB</td><td>normal</td></tr>
+      </tbody>
+    </table>
+    <p class="claim-note">
+      Tearing down the contended VM (<span class="mono">sno-single</span>) recovered the host instantly, and
+      a full regression pass on <span class="mono">sno-a</span>/<span class="mono">sno-b</span> came back
+      8/8 clean - they were never actually damaged, just starved. Re-running Test Case 1 in isolation
+      afterward passed cleanly end to end (see 02, above).
+    </p>
+    <div class="try-box">
+      <h4>Practical takeaway</h4>
+      <ul>
+        <li>This host comfortably runs <b>two</b> 8vCPU/16GB SNO nodes at once. A third pushes it into swap and produces CVO/apiserver errors that look like a product bug but are host contention.</li>
+        <li><span class="mono">scripts/run-test-matrix.sh</span> already wipes between every phase, so the CI path never hits this - it only bit us here because we ran Test Case 1 <em>alongside</em> a live demo pair instead of after wiping.</li>
+        <li>If you need to demo two topologies simultaneously on one host, budget accordingly (32GB+ headroom above the two demo clusters) or use a second physical host.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============ PLATFORM GOTCHAS ============ -->
+  <section class="part">
+    <div class="part-head">
+      <span class="part-num">04</span>
+      <h2>RHEL 10 host gotchas worth knowing before you start</h2>
+    </div>
+    <p class="part-intro">
+      None of these are OCP bugs - they're EL10 packaging/permission specifics that cost real time
+      the first time through.
+    </p>
+    <ul class="gotchas">
+      <li><b>libvirt-daemon doesn't pull in networking or QEMU support <span class="tag">packaging</span></b>
+        <span class="mono">libvirt-daemon-driver-network</span> and <span class="mono">-qemu</span> are separate packages on EL10 - install them explicitly.</li>
+      <li><b>genisoimage doesn't exist on EL10 <span class="tag">packaging</span></b>
+        Use <span class="mono">xorriso</span> instead for any ISO-building step.</li>
+      <li><b>qemu-kvm moved <span class="tag">packaging</span></b>
+        The binary lives at <span class="mono">/usr/libexec/qemu-kvm</span>, not <span class="mono">/usr/bin/</span>.</li>
+      <li><b>The unprivileged qemu user can't see into /root <span class="tag">permissions</span></b>
+        uid 107 can't traverse a 0700 home directory. VM storage has to live somewhere it can reach -
+        we use <span class="mono">/home/libvirt-images</span> with <span class="mono">0711</span> perms and the
+        <span class="mono">virt_image_t</span> SELinux context.</li>
+      <li><b>ENOSPC pauses the VM, it doesn't corrupt it <span class="tag">storage</span></b>
+        Each SNO's disk reliably hits 25-30GB+ during install. A full filesystem shows up as
+        <span class="mono">paused (I/O error)</span> in <span class="mono">virsh domstate --reason</span> -
+        relocate storage to a filesystem with headroom, fix ownership/SELinux, redefine the domain, resume.</li>
+      <li><b>XFS has no shrink <span class="tag">storage</span></b>
+        Don't try to grow one LV by shrinking another when both are XFS - there's no shrink operation at
+        all, only <span class="mono">xfs_growfs</span>. Point VM storage at whichever filesystem already
+        has room instead.</li>
+      <li><b>A hard power-cycle mid-install wrecks cluster health for hours <span class="tag">operations</span></b>
+        <span class="mono">virsh destroy</span> on a node that's already rolling out operators leaves
+        <span class="mono">oc get co</span> stuck <span class="mono">Progressing=True</span> for a long
+        time. Prefer <span class="mono">virsh shutdown</span>, or just wipe and rebuild - it's faster
+        than nursing a disrupted single-node control plane back to health.</li>
+    </ul>
+  </section>
+
+  <!-- ============ AUTOMATION ============ -->
+  <section class="part">
+    <div class="part-head">
+      <span class="part-num">05</span>
+      <h2>What's automated already</h2>
+    </div>
+    <p class="part-intro">
+      A CI-style matrix exists today for Test Cases 1 and 2 - wipe, deploy, prove healthy, wipe, next
+      topology, report. Not yet wired into cloud CI (needs a self-hosted runner with real
+      <span class="mono">virsh</span> access), but runs the same way locally.
+    </p>
+    <table class="data">
+      <thead><tr><th>Script</th><th>Does</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">wipe-all-sno.sh</td><td>Destroys/undefines every known SNO VM, cleans install dirs and <span class="mono">/etc/hosts</span></td></tr>
+        <tr><td class="mono">test-single.sh</td><td>Test Case 1 health check: ClusterVersion Available, no degraded operators, node Ready</td></tr>
+        <tr><td class="mono">test-prp-failover.sh</td><td>Test Case 2: health + PRP mode + reachability + a real hypervisor-level link cut + kernel node-table check</td></tr>
+        <tr><td class="mono">run-test-matrix.sh</td><td>Orchestrates all of the above end to end and writes a markdown report</td></tr>
+      </tbody>
+    </table>
+    <p class="claim-note">
+      <span class="mono">.github/workflows/sno-test-matrix.yml</span> runs <span class="mono">run-test-matrix.sh</span>
+      on <span class="mono">workflow_dispatch</span>, on a self-hosted runner labeled
+      <span class="mono">kvm-prp-lab</span>, and uploads the report + logs as build artifacts.
+    </p>
+  </section>
+
+  <!-- ============ NEXT ============ -->
+  <section class="part">
+    <div class="part-head">
+      <span class="part-num">06</span>
+      <h2>What's not covered yet: TNF</h2>
+    </div>
+    <p class="part-intro">
+      Two-Node OpenShift with Fencing + PRP is a fourth, deliberately separate topology - not just
+      another <span class="mono">-e sno_topology=...</span> value. It needs its own design pass:
+    </p>
+    <ul class="gotchas">
+      <li><b>Different install flow <span class="tag">design</span></b>
+        Agent-based installer support for TNF starts at <b>OCP 4.22</b> - confirmed, supersedes an
+        earlier read of the docs that only found IPI/UPI documented (that was against 4.20-era docs).</li>
+      <li><b>Needs a virtual BMC <span class="tag">design</span></b>
+        TNF's fencing credentials expect a real Redfish BMC per node; on a KVM lab that means
+        <span class="mono">sushy-tools</span> backed by libvirt.</li>
+      <li><b>Needs an external load balancer <span class="tag">design</span></b>
+        Unlike SNO, a 2-node control plane needs something in front of it (Red Hat's own docs show a
+        sample haproxy config forwarding 6443/80/443).</li>
+    </ul>
+    <p class="claim-note">Deliberately out of this report and out of the current CI matrix - tracked as its own follow-up spec.</p>
+  </section>
+
+  <footer>
+    <span>ocp-abi-local-sno · install report, all three topologies</span>
+    <span>Generated 2026-09-17 · OCP 5.0.0-rc.2</span>
+  </footer>
+</div>
+</body>
+</html>

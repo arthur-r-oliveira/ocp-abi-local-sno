@@ -49,10 +49,10 @@ network layout, and which of the Day-0/Day-2 workarounds below apply.
   (open directly in a browser) - built for sharing outside the repo.
 - **[docs/ocp5-install-report.md](docs/ocp5-install-report.md)** - all three
   topologies' results, the host-memory-oversubscription lesson, EL10 gotchas,
-  and CI status in one place. Markdown counterpart of the
-  [HTML report artifact](https://claude.ai/artifact/8D37A84CkpjMzLdmG1kpuC) -
-  every report gets a markdown file committed here, not just a standalone
-  HTML/artifact copy.
+  and CI status in one place. Standalone visual counterpart:
+  **[docs/ocp5-install-report.html](docs/ocp5-install-report.html)** (open
+  directly in a browser) - every report gets a markdown file committed here,
+  not just a standalone HTML copy.
 - **[docs/upstream-issue-1-nmstate-hsr-gen-conf.md](docs/upstream-issue-1-nmstate-hsr-gen-conf.md)** /
   **[docs/upstream-issue-2-agent-based-installer-hsr.md](docs/upstream-issue-2-agent-based-installer-hsr.md)** /
   **[docs/upstream-issue-3-assisted-installer-agent-hsr-inventory.md](docs/upstream-issue-3-assisted-installer-agent-hsr-inventory.md)** -
