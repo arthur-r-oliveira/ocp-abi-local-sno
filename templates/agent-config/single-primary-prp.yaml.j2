@@ -36,6 +36,7 @@ hosts:
             enabled: false
           ipv6:
             enabled: false
+{% if not (topology_needs_prp_nmconnection_workaround | default(false)) %}
         # THE central difference from dual-sidecar-prp.yaml.j2: prp0
         # carries the node's primary IP/default route/DNS here, not a
         # separate eth0. OVN-Kubernetes's configure-ovs.sh follows
@@ -70,6 +71,8 @@ hosts:
                 prefix-length: {{ prp_prefix_length }}
           ipv6:
             enabled: false
+{% endif %}
+{% if not (topology_needs_prp_nmconnection_workaround | default(false)) %}
       dns-resolver:
         config:
           server:
@@ -79,3 +82,12 @@ hosts:
           - destination: 0.0.0.0/0
             next-hop-address: {{ prp_lan_a_nat_gateway }}
             next-hop-interface: prp0
+{% endif %}
+{#
+  Workaround mode (topology_needs_prp_nmconnection_workaround: true):
+  DNS/routes for prp0 are NOT declared here at all - nmstate would reject
+  a route/DNS pointing at an interface this same document doesn't manage,
+  since prp0 isn't declared above in workaround mode. They're baked
+  directly into the hand-authored prp0.nmconnection's own [ipv4] section
+  instead (dns=/route0=) - see day0-manifests/prp0.nmconnection.j2 (merged directly into the ISO's ignition via scripts/embed-day0-file.py - see tasks/deploy_node.yml).
+#}

@@ -2,9 +2,15 @@
 
 **Status: IMPLEMENTED AND RUN. Result: Outcome A (installation does not
 work out of the box) - directly confirmed with node-local evidence (not
-just inferred from Test Case 2), see "Result" at the end of this document.
-Worth reporting upstream (see "Escalation plan"), but not a hard blocker -
-see "What Outcome A means" below for the actual priority.**
+just inferred from Test Case 2). UPDATE: a working Day-0 workaround for
+the original bug now exists and is validated live - `prp0` comes up
+correctly with real PRP protocol and full node connectivity. That
+uncovered a second, distinct, not-yet-root-caused blocker
+(`assisted-service`'s "Host does not belong to machine network CIDRs"
+validation) that currently still prevents this topology from completing
+an actual install. See "Update: workaround confirmed, new blocker
+surfaced" at the end of this document for the full picture, and "Result"
+just above it for the original finding.**
 
 ## Why this test case is different from Test Case 2
 
@@ -497,3 +503,187 @@ the root-cause mechanism. Filing it into an actual tracker
 (Bugzilla/GitHub/support case) remains a
 decision for whoever owns that relationship, and isn't required for this
 test case to be considered done.
+
+---
+
+## Update: workaround confirmed, new blocker surfaced
+
+Following up on "Escalation plan" above, the reproducible-but-not-blocking
+finding got a real fix attempt rather than staying purely diagnostic. Two
+real results came out of that, one entirely positive and one still open.
+
+### The original bug: worked around, confirmed live
+
+Since the root cause is fully understood (`docs/prp-test-case.md`'s "Root
+cause": `nmstate`'s offline `gen_conf` keyfile writer never got an `hsr`
+branch, while the live D-Bus apply path did), the fix doesn't need to wait
+for upstream - the same field values `nmstate` already gets right for
+every other section of `prp0.nmconnection` can be written by hand, adding
+just the one missing `[hsr]` section, and delivered straight into the
+live ISO's real Ignition config instead of relying on the broken
+translation.
+
+**Correction to Requirement 2b above, learned the hard way**:
+`openshift-install agent`'s "Day-0 extra manifests"
+(`<install_dir>/openshift/*.yaml`) do **not** land on the live boot
+filesystem at all. Confirmed directly via a `dracut rd.break` shell: they
+get staged at `/etc/assisted/extra-manifests/` for the Machine Config
+Operator to apply once the cluster exists - a Day-1 mechanism, not a
+pre-boot one. This means the `hsr`-module-autoload manifest never had any
+effect on whether `prp0` could come up at first boot, in this test case or
+Test Case 2's original investigation. It turns out not to have mattered:
+the kernel's own `rtnl-link-hsr` module alias autoloads `hsr` on demand
+the moment NetworkManager attempts `ip link add type hsr`, confirmed
+working with no explicit `modules-load.d` entry needed. The manifest is
+still shipped (harmless, and gives reliable module-load-on-reboot
+behavior once a cluster exists to apply it), but it was never the
+mechanism protecting against a module-timing problem - there wasn't one.
+
+**The actual working mechanism** (`scripts/embed-day0-file.py`,
+`day0-manifests/prp0.nmconnection.j2`, wired into
+`tasks/deploy_node.yml`):
+
+1. `templates/agent-config/single-primary-prp.yaml.j2` omits `prp0` from
+   `networkConfig` entirely (`topology_needs_prp_nmconnection_workaround:
+   true` in `vars/topologies/single-primary-prp.yml`) - `eth0`/`eth1`
+   still get their shared-MAC configuration through the normal,
+   unaffected part of the pipeline.
+2. A hand-correct `prp0.nmconnection` - `[hsr]` section added, everything
+   else identical to what `nmstate` already produces correctly for this
+   exact input - gets merged directly into the ISO's own top-level
+   Ignition config via `coreos-installer iso ignition show`/`embed`
+   (**not** the extra-manifests path above - this one does apply
+   pre-boot).
+3. Target path matters and is **not**
+   `/etc/NetworkManager/system-connections/prp0.nmconnection`, even
+   though that's the file's final destination - confirmed the hard way.
+   `/usr/local/bin/pre-network-manager-config.sh` (baked into the ISO's
+   own ignition, `Before=NetworkManager.service`) unconditionally wipes
+   `/etc/NetworkManager/system-connections/*` and repopulates it only
+   from `/etc/assisted/network/host0/*.nmconnection` - the same staging
+   directory `eth0.nmconnection`/`eth1.nmconnection` already use. Writing
+   straight to `system-connections/` gets deleted before NetworkManager
+   ever starts; writing to `/etc/assisted/network/host0/` instead lets
+   that script's own already-correct copy logic install it for us.
+
+**Validated live, node-local evidence** (`nmcli`/`ip` over SSH, not just a
+ping):
+```
+$ ssh core@192.168.140.50 ip -d link show prp0
+4: prp0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1494 ...
+    link/ether 52:54:00:aa:aa:10 ...
+    hsr slave1 enp1s0 slave2 enp6s0 sequence ... proto 1 ...
+
+$ ssh core@192.168.140.50 nmcli -f GENERAL,IP4 device show prp0
+GENERAL.NM-TYPE:   NMDeviceHsr
+GENERAL.STATE:     100 (connected)
+IP4.ADDRESS[1]:    192.168.140.50/24
+IP4.GATEWAY:       192.168.140.1
+```
+`proto 1` (PRP, not HSR) - the same signature already proven correct on
+Test Case 2's sidecar topology. This closes the original finding for
+real: the Day-0 HSR/PRP defect on this topology is now fully worked
+around, not merely diagnosed.
+
+### A second, distinct, not-yet-root-caused blocker
+
+With `prp0` correctly up and fully reachable, `openshift-install agent
+wait-for bootstrap-complete` still doesn't get past assisted-service's own
+pre-install validation:
+```
+level=warning msg=Cluster validation: The cluster has hosts that are not ready to install.
+level=warning msg=Host sno-prp-primary.apps.lab.corp validation: Host does not
+  belong to machine network CIDRs. Verify that the host belongs to every CIDR
+  listed under machine networks
+```
+This is **not** the same bug. `install-config.yaml`'s `machineNetwork.cidr`
+correctly resolves to `prp_lan_a_nat_subnet_cidr` (`192.168.140.0/24`),
+and the node's actual live address (`192.168.140.50/24` on `prp0`, correct
+gateway, correct routes - see the `nmcli`/`ip` output above) matches that
+CIDR exactly. Confirmed persistent, not transient (`assisted-service` does
+periodically re-check validations - `ntp-synced` visibly flipped to fixed
+during the same run - this one didn't, across multiple poll cycles).
+
+Leading hypothesis, not yet confirmed: `assisted-service`'s host inventory
+for this validation is most likely built from **its own** model of the
+node's interfaces (derived from what it generated/expects via
+`AgentConfig`/`NMStateConfig`), not from a live re-query of the node's
+actual interfaces at validation time. Since `prp0` was deliberately never
+declared to `assisted-service` at all in this workaround (removed from
+`networkConfig` specifically to avoid the broken translation), its own
+inventory model may simply have no record of an interface named `prp0`
+ever existing to check a CIDR against - independent of whether that
+interface is real, correctly configured, and fully reachable. Unconfirmed
+because it would need reading `assisted-service`'s own validation source
+or its API's host-inventory response, neither done yet.
+
+**Practical effect on this test case's status**: the originally-reported,
+fully-diagnosed bug (Day-0 `nmstate` `gen_conf` dropping `[hsr]`) is
+resolved with a working, validated workaround. Full install completion
+for this topology is still blocked, but by a different problem with a
+different, not-yet-identified owner - worth its own investigation before
+either escalating further or filing an issue about it, since the root
+cause isn't pinned down yet the way the original one was.
+
+**Update (2026-09-18): reproducibility confirmed, root cause found - a
+third, separate upstream bug.**
+A full wipe + fresh redeploy reproduced the exact same result -
+`prp0` comes up correctly (`hsr slave1 enp1s0 slave2 enp6s0 ... proto 1`)
+every time, not a one-off artifact of the first boot that happened to
+work - and the same CIDR validation failure recurs identically,
+deterministically.
+
+The hypothesis above was on the right track but imprecise. Confirmed
+directly, not by API (the node's local assisted-service API needs mTLS
+client certs this environment doesn't have handy) but by going straight
+to its database:
+```
+$ ssh core@<node> sudo podman exec assisted-db psql -h 127.0.0.1 -U admin -d installer \
+    -t -A -c "select inventory from hosts limit 1;"
+```
+The stored inventory JSON has interface entries for `enp1s0` and `enp6s0`
+only - **`prp0` is completely absent**, despite the on-node inventory
+collector visibly walking it (`journalctl` shows `Executing biosdevname
+[-i prp0]`). `assisted-service`'s `belongsToMachineCidr` validator
+(`internal/network/machine_network_cidr.go`, `belongsToNetwork()`) just
+iterates a host's stored `Inventory.Interfaces` checking each one's
+`IPV4Addresses` against the machine CIDR - since `prp0` was never in that
+list to check in the first place, this fails unconditionally, every time,
+regardless of how correctly the interface is actually configured on the
+node.
+
+**This is a different project's bug, not assisted-service's own logic**:
+traced into `assisted-installer-agent` (the component that actually
+collects and reports host inventory), `src/inventory/interfaces.go`. Its
+vendored `github.com/vishvananda/netlink` library is pinned at
+`v1.2.1-beta.2`, which has **zero awareness of the `hsr` link kind
+anywhere** in its source (no `Hsr` struct, not one case in the link-type
+deserializer's switch statement) - it predates HSR kernel support
+entirely. The collector's own per-interface error logging
+(`Retrieiving interface type for %s` / `Retrieving addresses for %s`)
+never fires for `prp0` specifically, so the exact single line where the
+record gets dropped isn't pinned with full certainty (would need a
+standalone Go repro against that exact vendored library version to nail
+it precisely - not done here) - but given that library's total lack of
+`hsr` support, that's overwhelmingly the likely mechanism, and the
+observed symptom (collector sees it, reported inventory doesn't have it)
+is fully consistent with it.
+
+**Net result for this test case**: two independent upstream bugs, in two
+separate projects, both because HSR/PRP is newer than either project's
+current release has caught up on - `nmstate` (interface never comes up at
+Day-0, worked around above) and `assisted-installer-agent` (interface
+comes up fine but is invisible to inventory-based validations, blocking
+`wait-for bootstrap-complete` from ever proceeding). No workaround found
+yet for this second one - unlike the `nmstate` bug, there's no equivalent
+"deliver the correct output by hand" option, since the gap is in what the
+*node itself reports about its own state* to assisted-service, not in a
+static file this repo controls. A third upstream issue draft exists:
+`docs/upstream-issue-3-assisted-installer-agent-hsr-inventory.md`.
+
+This closes the investigation into the *original* Day-0 bug as fully
+resolved (worked around, validated live) while leaving full end-to-end
+installation for this topology blocked by a newly-discovered, separate,
+now-root-caused issue - a materially better state than where this section
+started (an unconfirmed guess), even though the topology still can't
+complete an install today.
