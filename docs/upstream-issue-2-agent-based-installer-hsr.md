@@ -20,8 +20,10 @@ alongside this one, and link it here once it has a number.
    already knowing it's actually an nmstate problem - the installer's own
    UX gives zero indication of that.
 2. There's a real, currently-undocumented gap for one specific topology
-   (HSR/PRP as the *primary* network) where no workaround exists at all,
-   which is worth a tracked item regardless of who owns the eventual fix.
+   (HSR/PRP as the *primary* network) - a Day-0-applicable workaround now
+   exists (see below), but it's expert-level (hand-editing the ISO's
+   Ignition config) and worth a tracked item regardless of who owns the
+   eventual `nmstate` fix.
 3. Whoever owns the vendored/packaged `nmstate` version bump on the
    installer side needs their own ticket to track picking that fix up
    once it lands upstream.
@@ -55,9 +57,12 @@ the interface never exists at boot.
   legitimate topology for protecting the one link that matters, e.g.
   substation/rail control networks - not just a redundant side channel):
   the node gets **zero network connectivity at all**. No DNS, no ping, no
-  reachable registry. Installation cannot proceed, and there is
-  **currently no workaround** - Day-2 remediation is not reachable
-  because there's no network path to apply it over.
+  reachable registry. Installation cannot proceed via the normal Day-2
+  path - `kubernetes-nmstate-operator` needs a reachable node/API, which
+  doesn't exist here - but a Day-0-applicable workaround does exist (see
+  "Workaround, primary-interface case" below): confirmed working, though
+  it requires hand-editing the ISO's Ignition config, not something
+  `AgentConfig`/`install-config.yaml` expose on their own.
 
 The installer's own network pre-flight check surfaces this as a generic
 DNS/HTTP failure, giving no indication that the actual cause is a
@@ -178,13 +183,14 @@ images in this draft.
      surfaced this specific class of bug (and similar future ones) far
      faster, without needing console/kernel-arg surgery to even see the
      real cause.
-   - Document, as a known limitation, that HSR/PRP-as-primary-network
-     topologies currently have **no working Day-0 or Day-2 path** (Day-2
-     `kubernetes-nmstate-operator` requires a reachable node/API, which
-     doesn't exist here) - so anyone attempting this topology today knows
-     up front rather than discovering it the hard way.
+   - Document the Day-0 Ignition-merge workaround below as official
+     guidance for HSR/PRP-as-primary-network topologies - Day-2
+     `kubernetes-nmstate-operator` still can't help here (no reachable
+     node/API), but the Day-0 path works and shouldn't require reverse-
+     engineering the ISO's staging directories to discover, the way it did
+     here.
 
-### Workaround (works only for the side-interface case)
+### Workaround, side-interface case: Day-2 operator
 
 For topologies where the `hsr`/PRP interface is *not* the node's only
 connectivity (a normal NIC also exists for API/Ingress/egress):
@@ -195,3 +201,47 @@ offline-generation path, so it's unaffected by this bug. Confirmed
 working in this environment. **Not usable** when HSR/PRP is the primary
 network, since there's no way to reach the operator's handler on a node
 with no network at all - see "Summary" above.
+
+### Workaround, primary-interface case: Day-0 Ignition merge (new, confirmed working)
+
+Turns out there is a Day-0-applicable option after all, just not through
+the mechanism you'd reach for first. **"Day-0 extra manifests"
+(`<install_dir>/openshift/*.yaml`, MachineConfigs) do not help here** -
+confirmed via a `dracut rd.break` shell that they stage at
+`/etc/assisted/extra-manifests/` for the Machine Config Operator to apply
+once a cluster exists, not on the live boot filesystem. What does work:
+omit the `hsr` interface from `AgentConfig`'s `networkConfig` entirely,
+and merge a hand-correct `.nmconnection` keyfile - `nmstate`'s own correct
+output for this input, plus the one missing `[hsr]` section - directly
+into the ISO's real Ignition config via `coreos-installer iso ignition
+show`/`embed`, targeting `/etc/assisted/network/host0/<name>.nmconnection`
+(not `/etc/NetworkManager/system-connections/` directly - a script baked
+into the ISO's own ignition, `pre-network-manager-config.sh`, wipes that
+directory and repopulates it only from the `host0/` staging path before
+NetworkManager starts). Confirmed live: `prp0` comes up as
+`hsr slave1 enp1s0 slave2 enp6s0 ... proto 1`, node fully reachable over
+SSH. Implementation: `scripts/embed-day0-file.py`,
+`day0-manifests/prp0.nmconnection.j2` in this repo.
+
+Worth folding into official guidance regardless of whether/when the
+upstream `nmstate` fix lands - it's a real, validated path forward for
+this exact topology today.
+
+### A second, distinct, now-root-caused issue found via this workaround
+
+With the `hsr` bug fully worked around and `prp0` fully functional,
+`assisted-service`'s own pre-install validation still fails:
+`Host does not belong to machine network CIDRs`, despite the node's live
+address matching the declared `machineNetwork.cidr` exactly. Confirmed
+persistent and deterministic across a full wipe + fresh redeploy, not
+transient.
+
+**Root-caused - a third, separate upstream bug, in a third project**: see
+`docs/upstream-issue-3-assisted-installer-agent-hsr-inventory.md` for the
+full trace. Short version: `assisted-installer-agent`'s host inventory
+collector never reports `prp0` to `assisted-service` at all (confirmed via
+direct DB query - the stored inventory has only the two physical NICs),
+because its vendored `netlink` library (`v1.2.1-beta.2`) has no awareness
+of the `hsr` link kind. `assisted-service`'s CIDR validator is working
+correctly against the (incomplete) data it's given - the defect is
+upstream of it, in what the node reports about itself.

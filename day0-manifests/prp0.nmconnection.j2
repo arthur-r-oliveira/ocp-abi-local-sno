@@ -1,0 +1,31 @@
+[connection]
+autoconnect=true
+autoconnect-slaves=1
+autoconnect-priority=1
+id=prp0
+interface-name=prp0
+type=hsr
+uuid={{ (node.hostname ~ '-prp0') | to_uuid }}
+
+[hsr]
+port1=eth0
+port2=eth1
+multicast-spec={{ prp_multicast_spec }}
+prp=true
+
+[ipv4]
+method=manual
+address0={{ node.prp_ip_address }}/{{ prp_prefix_length }}
+dns={{ prp_lan_a_nat_gateway }}
+dns-priority=40
+route0=0.0.0.0/0,{{ prp_lan_a_nat_gateway }},0
+route0_options=table=254
+dhcp-timeout=2147483647
+
+[ipv6]
+method=disabled
+addr-gen-mode=0
+dhcp-timeout=2147483647
+
+[ethernet]
+cloned-mac-address={{ node.prp_mac_address }}

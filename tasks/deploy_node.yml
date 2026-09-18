@@ -45,14 +45,20 @@
   ansible.builtin.set_fact:
     node_macs: "{{ dict(topology_mac_names | zip(vm_xml_result.get_xml | regex_findall(\"mac address='([^']+)'\"))) }}"
 
-# Test Case 3 only (single-primary-prp): the hsr kernel module has to be
-# loaded before NetworkManager processes the AgentConfig's networkConfig,
-# and there is no kubernetes-nmstate-operator here to fall back on for a
-# Day-2 fix - so this ships as a Day-0 extra manifest instead, picked up
-# automatically by `openshift-install agent create image` from
-# <install_dir>/openshift/*.yaml. See docs/spec-test-case-3-prp-primary.md -
-# this makes the module available, it does NOT by itself work around the
-# known Day-0 HSR/PRP serializer bug documented in docs/prp-test-case.md.
+# IMPORTANT, learned the hard way (see docs/spec-test-case-3-prp-primary.md):
+# openshift-install agent's "Day-0 extra manifests"
+# (<install_dir>/openshift/*.yaml) do NOT land on the live boot
+# filesystem. They're staged at /etc/assisted/extra-manifests/ for the
+# Machine Config Operator to apply once the cluster exists - a Day-1
+# mechanism, not a pre-boot one. Confirmed directly via a dracut rd.break
+# shell: this file never reaches /etc/modules-load.d/ before NetworkManager
+# starts. It's still worth shipping - once install succeeds, MCO applies
+# it like any other MachineConfig, giving reliable module-load-on-reboot
+# behavior thereafter - but it has zero effect on whether prp0 comes up at
+# first boot. Turns out that doesn't matter either: the kernel's own
+# `rtnl-link-hsr` module alias autoloads `hsr` on demand the moment
+# NetworkManager attempts `ip link add type hsr`, confirmed working with
+# no explicit modules-load.d entry needed. Left in for Day-1 robustness.
 - name: "[{{ node.vm_name }}] Ensure Day-0 extra manifests directory exists"
   ansible.builtin.file:
     path: "{{ node.install_dir }}/openshift"
@@ -78,6 +84,50 @@
     cmd: "openshift-install agent create image --dir={{ node.install_dir }} --log-level=debug"
     creates: "{{ node.install_dir }}/agent.x86_64.iso"
   register: iso_result
+
+# Confirmed working workaround for the Day-0 nmstate gen_conf bug
+# (docs/prp-test-case.md's "Root cause"): AgentConfig's networkConfig
+# omits `prp0` entirely for this topology (see the matching
+# `{% if not topology_needs_prp_nmconnection_workaround %}` guard in
+# templates/agent-config/single-primary-prp.yaml.j2), and a hand-correct
+# prp0.nmconnection - the same fields nmstate already gets right for this
+# exact input, plus the one missing [hsr] section - is merged directly
+# into the ISO's real Ignition config instead. This is NOT the same thing
+# as a "Day-0 extra manifest" above (those don't apply pre-boot at all -
+# see the comment on that block); this goes through the ISO's own
+# top-level ignition config via `coreos-installer iso ignition
+# show`/`embed`, which does.
+#
+# Destination path matters and is NOT
+# /etc/NetworkManager/system-connections/prp0.nmconnection, even though
+# that's where the file ultimately needs to end up - confirmed the hard
+# way. /usr/local/bin/pre-network-manager-config.sh (baked into the ISO's
+# own ignition, runs Before=NetworkManager.service) unconditionally does
+# `rm -f /etc/NetworkManager/system-connections/*` and then repopulates
+# that directory only from /etc/assisted/network/host0/*.nmconnection -
+# the exact same staging directory eth0.nmconnection/eth1.nmconnection
+# already use. Writing straight to system-connections/ gets deleted
+# before NetworkManager ever starts; writing to
+# /etc/assisted/network/host0/ instead lets that script's own
+# already-correct copy logic install it for us. Validated live with this
+# exact path: prp0 comes up as
+# `hsr slave1 enp1s0 slave2 enp6s0 ... proto 1`, node reachable over SSH.
+- name: "[{{ node.vm_name }}] Render prp0.nmconnection content for the ignition-embed workaround"
+  ansible.builtin.template:
+    src: day0-manifests/prp0.nmconnection.j2
+    dest: "/tmp/{{ node.vm_name }}-prp0.nmconnection"
+    mode: '0600'
+  when: (topology_needs_prp_nmconnection_workaround | default(false)) and iso_result.changed
+
+- name: "[{{ node.vm_name }}] Embed prp0.nmconnection directly into the ISO's real ignition config"
+  ansible.builtin.command:
+    cmd: >
+      python3 {{ playbook_dir }}/scripts/embed-day0-file.py
+      {{ node.install_dir }}/agent.x86_64.iso
+      /etc/assisted/network/host0/prp0.nmconnection
+      /tmp/{{ node.vm_name }}-prp0.nmconnection
+      0600
+  when: (topology_needs_prp_nmconnection_workaround | default(false)) and iso_result.changed
 
 # This topology has no other way to see what happened on first boot if the
 # node never gets an IP (no SSH, no oc) - RHCOS's default agent ISO kernel

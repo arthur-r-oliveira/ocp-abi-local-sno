@@ -212,3 +212,16 @@ to come up at first boot, with no error surfaced anywhere the installer's
 own tooling shows the user - only visible via NetworkManager's journal on
 the (possibly otherwise unreachable) node itself. A separate downstream
 tracking issue covers that side; linking here once both exist.
+
+### Update: the suggested fix is confirmed correct, not just theorized
+
+Validated by hand-writing exactly the keyfile section the analysis above
+says `to_keyfile()` is missing - same field names, same values `nmstate`
+already produces correctly for every other section of this exact input -
+and merging it into a real boot's NetworkManager configuration in place
+of `gen_conf`'s output. Result: `prp0` comes up correctly, real `proto 1`
+(PRP), full IP connectivity. This isn't a second, independent
+confirmation of a different bug - it's the same one, closed by supplying
+by hand exactly what the missing `hsr.rs` module would generate. Strong
+signal that the suggested fix above is both correct and sufficient, not
+just plausible.

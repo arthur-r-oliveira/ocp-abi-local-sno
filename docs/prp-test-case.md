@@ -125,8 +125,16 @@ versions.
 
 ## Remediation: kubernetes-nmstate-operator (Day-2)
 
-The durable fix is the `kubernetes-nmstate-operator` + a
+The durable fix for this topology (PRP as a side network, node keeps
+another working interface) is the `kubernetes-nmstate-operator` + a
 `NodeNetworkConfigurationPolicy` (NNCP) applied after `install-complete`.
+
+**For a topology where PRP is the node's only interface** (no other
+network to reach an operator over), see
+`docs/spec-test-case-3-prp-primary.md`'s "Update: workaround confirmed,
+new blocker surfaced" section instead - a different, Day-0-applicable
+workaround exists there (hand-correct keyfile merged directly into the
+ISO's real Ignition config), validated live.
 Its handler runs the **real** `nmstatectl` directly on the node via a
 privileged DaemonSet pod - a completely different code path from the
 installer's broken Day-0 serializer - and correctly produces a keyfile

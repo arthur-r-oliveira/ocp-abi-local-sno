@@ -48,6 +48,24 @@ topology_needs_day0_extra_manifests: true
 # be added explicitly or `virsh console`/serial capture comes back empty.
 topology_needs_serial_console_debug: true
 
+# CONFIRMED WORKING workaround for the Day-0 nmstate gen_conf bug
+# (docs/prp-test-case.md's "Root cause" section): when true, `prp0` is NOT
+# declared in AgentConfig's networkConfig at all - eth0/eth1 still are
+# (that part of the pipeline already works correctly and is untouched).
+# Instead, a hand-correct prp0.nmconnection keyfile - the exact broken
+# output already confirmed for this bug, plus the one missing [hsr]
+# section, using NetworkManager's own documented property names (`man 5
+# nm-settings-dbus`) - is merged directly into the ISO's real Ignition
+# config via scripts/embed-day0-file.py (coreos-installer iso ignition
+# show/embed), bypassing the broken installer translation path entirely.
+# NOT a Day-0 "extra manifest" (MachineConfig) - those don't apply until
+# the cluster's Machine Config Operator exists, which never happens if
+# the node has no network in the first place. See
+# day0-manifests/prp0.nmconnection.j2 and tasks/deploy_node.yml. Validated
+# live: prp0 comes up as `hsr slave1 enp1s0 slave2 enp6s0 ... proto 1`,
+# node reachable over SSH.
+topology_needs_prp_nmconnection_workaround: true
+
 net_prp_lan_a: "prp-lan-a-nat"
 net_prp_lan_b: "prp-lan-b-nat"
 
