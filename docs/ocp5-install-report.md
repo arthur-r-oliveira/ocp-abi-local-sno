@@ -3,7 +3,7 @@
 **Three agent-based-installer SNO topologies on OpenShift 5.0.0-rc.2** -
 what passed, what's a confirmed installer bug, and what we learned running
 three SNO VMs on one 46GB KVM host. Standalone visual counterpart:
-[docs/ocp5-install-report.html](docs/ocp5-install-report.html) (open
+[ocp5-install-report.html](ocp5-install-report.html) (open
 directly in a browser) - keep both in sync when either changes.
 
 Host: internal KVM lab (RHEL 10). Dates: 2026-09-17 to 2026-09-18. OCP: 5.0.0-rc.2.

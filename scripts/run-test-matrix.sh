@@ -104,23 +104,28 @@ phase_result "Deploy" $?
 
 # Both nodes bootstrap independently - wait for them in parallel rather
 # than doubling the wall-clock time waiting sequentially.
-timeout 5400 openshift-install agent wait-for install-complete \
-  --dir="${STORAGE_BASE}/sno-install/sno-a" --log-level=info \
-  > "$LOG_DIR/install-sno-a.log" 2>&1 &
-PID_A=$!
-timeout 5400 openshift-install agent wait-for install-complete \
-  --dir="${STORAGE_BASE}/sno-install/sno-b" --log-level=info \
-  > "$LOG_DIR/install-sno-b.log" 2>&1 &
-PID_B=$!
+if [ -d "${STORAGE_BASE}/sno-install/sno-a" ] && [ -d "${STORAGE_BASE}/sno-install/sno-b" ]; then
+  timeout 5400 openshift-install agent wait-for install-complete \
+    --dir="${STORAGE_BASE}/sno-install/sno-a" --log-level=info \
+    > "$LOG_DIR/install-sno-a.log" 2>&1 &
+  PID_A=$!
+  timeout 5400 openshift-install agent wait-for install-complete \
+    --dir="${STORAGE_BASE}/sno-install/sno-b" --log-level=info \
+    > "$LOG_DIR/install-sno-b.log" 2>&1 &
+  PID_B=$!
 
-wait "$PID_A"; RC_A=$?
-wait "$PID_B"; RC_B=$?
-phase_result "Install sno-a (bootstrap + operators)" $RC_A
-phase_result "Install sno-b (bootstrap + operators)" $RC_B
+  wait "$PID_A"; RC_A=$?
+  wait "$PID_B"; RC_B=$?
+  phase_result "Install sno-a (bootstrap + operators)" $RC_A
+  phase_result "Install sno-b (bootstrap + operators)" $RC_B
 
-run_logged "$LOG_DIR/test-prp-failover.log" "PRP failover suite" \
-  ./scripts/test-prp-failover.sh
-phase_result "PRP failover suite (health, prp0 mode, reachability, failover, node_table)" $?
+  run_logged "$LOG_DIR/test-prp-failover.log" "PRP failover suite" \
+    ./scripts/test-prp-failover.sh
+  phase_result "PRP failover suite (health, prp0 mode, reachability, failover, node_table)" $?
+else
+  append_report "- **Install**: FAIL (deploy did not produce install directories)"
+  OVERALL_FAIL=1
+fi
 
 echo
 echo "############ Wipe (post-matrix) ############"

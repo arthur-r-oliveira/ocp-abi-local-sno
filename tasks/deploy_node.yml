@@ -129,6 +129,12 @@
       0600
   when: (topology_needs_prp_nmconnection_workaround | default(false)) and iso_result.changed
 
+- name: "[{{ node.vm_name }}] Clean up temporary prp0.nmconnection file"
+  ansible.builtin.file:
+    path: "/tmp/{{ node.vm_name }}-prp0.nmconnection"
+    state: absent
+  when: topology_needs_prp_nmconnection_workaround | default(false)
+
 # This topology has no other way to see what happened on first boot if the
 # node never gets an IP (no SSH, no oc) - RHCOS's default agent ISO kernel
 # args only enable the VGA console, so virsh console/serial capture comes
@@ -154,10 +160,11 @@
     - name: "[{{ node.vm_name }}] Add static host entry to network XML"
       community.general.xml:
         xmlstring: "{{ current_net_xml.get_xml }}"
-        xpath: "/network/ip/dhcp/host[@mac='{{ node_macs.eth0 }}']"
+        xpath: "/network/ip/dhcp"
         state: present
         add_children:
           - host:
+              '@mac': "{{ node_macs.eth0 }}"
               '@ip': "{{ node.ip_address }}"
               '@name': "{{ node.hostname }}"
         pretty_print: true
@@ -186,5 +193,5 @@
     # no-op, not a wildcard match. List every route host actually needed
     # (console/download/oauth) explicitly instead.
     line: "{{ node.ip_address | default(node.prp_ip_address) }} api.{{ node.hostname }}.{{ sno_domain }} console-openshift-console.apps.{{ node.hostname }}.{{ sno_domain }} downloads-openshift-console.apps.{{ node.hostname }}.{{ sno_domain }} oauth-openshift.apps.{{ node.hostname }}.{{ sno_domain }}"
-    regexp: "^{{ node.ip_address | default(node.prp_ip_address) }}"
+    regexp: "^{{ node.ip_address | default(node.prp_ip_address) | regex_escape() }}"
     state: present
