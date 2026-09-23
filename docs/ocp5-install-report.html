@@ -6,8 +6,6 @@
 <title>OCP 5 Install Report</title>
 <meta name="description" content="Three agent-based-installer topologies on OCP 5.0.0-rc.2 - what passed, what's a confirmed installer bug, and what we learned running three SNO VMs on one 46GB KVM host." />
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
-
   :root{
     --bg:#f5f6f9; --surface:#ffffff; --surface-2:#eceff4;
     --ink:#12161f; --muted:#565f70; --border:#dde1ea;
@@ -131,8 +129,8 @@
   @media (max-width:640px){.grid2{grid-template-columns:1fr;}}
 
   table{width:100%; border-collapse:collapse; font-size:13.5px; margin:14px 0;}
-  table.data{border:1px solid var(--border); border-radius:10px; overflow:hidden; background:var(--surface); box-shadow:var(--shadow); display:block; overflow-x:auto;}
-  table.data table, table.data{display:table;}
+  .table-wrap{border:1px solid var(--border); border-radius:10px; overflow:hidden; background:var(--surface); box-shadow:var(--shadow); overflow-x:auto;}
+  .table-wrap table{width:100%;}
   th,td{padding:9px 12px; text-align:left; border-bottom:1px solid var(--border);}
   thead th{background:var(--surface-2); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted);}
   tbody tr:last-child td{border-bottom:none;}
@@ -187,7 +185,7 @@
     <div class="verdicts">
       <span class="chip"><span class="dot"></span><b>single</b><span class="n">Test Case 1 · clean install</span></span>
       <span class="chip"><span class="dot"></span><b>dual-sidecar-prp</b><span class="n">Test Case 2 · 0% loss failover</span></span>
-      <span class="chip bad"><span class="dot"></span><b>single-primary-prp</b><span class="n">Test Case 3 · installer bug, confirmed node-local</span></span>
+      <span class="chip warn"><span class="dot"></span><b>single-primary-prp</b><span class="n">Test Case 3 · two upstream bugs; nmstate worked around, assisted-agent still blocks</span></span>
       <span class="chip warn"><span class="dot"></span><b>3 VMs at once</b><span class="n">host RAM oversubscribed → CVO errors</span></span>
     </div>
     <div class="meta-row">
@@ -283,7 +281,7 @@ INFO <span class="g">Install complete!</span>
 == Summary: <span class="g">8 passed, 0 failed</span> ==</pre>
     </div>
 
-    <h3 class="claim">Test Case 3 - single-primary-prp <span class="status bug">Confirmed installer bug, node-local evidence</span></h3>
+    <h3 class="claim">Test Case 3 - single-primary-prp <span class="status flag">Two upstream bugs found; first worked around</span></h3>
     <p class="claim-note">
       The Day-0 NMState config for <span class="mono">prp0</span> is schema-valid and builds a clean ISO,
       but <span class="mono">openshift-install</span>'s embedded nmstate→NetworkManager translator drops
@@ -323,12 +321,30 @@ address0=192.168.140.50/24
     <p class="claim-note">
       Correct input, broken output, baked into the ISO before the VM ever boots - the same defect shape
       already confirmed on the sidecar topology, now independently reproduced here rather than assumed
-      from it. One real difference from Test Case 2 worth calling out plainly:
-      <b>there is no Day-2 workaround for this topology.</b> The
+      from it. There is no Day-2 workaround for this topology (the
       <span class="mono">kubernetes-nmstate-operator</span> fix that works for Test Case 2 needs a
-      reachable API server to apply its <span class="mono">NodeNetworkConfigurationPolicy</span> - and a
-      node with zero network connectivity has no way to reach one. This is currently a real gap, not
-      just an inconvenience.
+      reachable API server), but <b>a Day-0 workaround now exists and is confirmed working.</b>
+      A hand-corrected <span class="mono">prp0.nmconnection</span> keyfile - nmstate's own correct
+      output plus the missing <span class="mono">[hsr]</span> section - is merged directly into the
+      ISO's Ignition config via <span class="mono">scripts/embed-day0-file.py</span>, bypassing the
+      broken translation entirely.
+    </p>
+    <div class="evidence">
+      <div class="src"><span>live SSH after Day-0 workaround → prp0 confirmed working</span></div>
+      <pre>$ ip -d link show prp0
+4: prp0: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; ...
+    hsr slave1 enp1s0 slave2 enp6s0 sequence ... <span class="g">proto 1</span> ...
+IP4.ADDRESS[1]: 192.168.140.50/24</pre>
+    </div>
+    <p class="claim-note">
+      <span class="mono">proto 1</span> = real PRP, same signature already proven on Test Case 2.
+      However, <b>with <span class="mono">prp0</span> now fully working, a second distinct blocker
+      surfaced</b> - <span class="mono">assisted-installer-agent</span>'s vendored
+      <span class="mono">netlink</span> library (<span class="mono">v1.2.1-beta.2</span>) has zero
+      awareness of the <span class="mono">hsr</span> link kind, so the host inventory never includes
+      <span class="mono">prp0</span> at all, even though the interface is live. The installer's own
+      validation then rejects the node with <em>"Host does not belong to machine network CIDRs"</em>
+      despite the address matching exactly. No workaround exists yet for this second bug.
     </p>
     <p class="claim-note">
       <b>Outcome, as decided with the team:</b> still not a hard blocker on our plan - out-of-box
@@ -359,13 +375,15 @@ version   5.0.0-rc.2   <span class="r">False</span>       <span class="m">True</
 $ oc get nodes
 <span class="r">Unable to connect to the server: stream error: stream ID 1; INTERNAL_ERROR; received from peer</span></pre>
       </div>
-    <table class="data">
+    <div class="table-wrap">
+    <table>
       <thead><tr><th>Moment</th><th>Free RAM</th><th>Swap in use</th><th>API server</th></tr></thead>
       <tbody>
         <tr><td>3 VMs running concurrently</td><td class="num">~400-450MB</td><td class="num">4.8 → 5.3GB, climbing</td><td>timing out</td></tr>
         <tr><td>After wiping down to 2 VMs</td><td class="num">13GB</td><td class="num">633MB</td><td>normal</td></tr>
       </tbody>
     </table>
+    </div>
     <p class="claim-note">
       Tearing down the contended VM (<span class="mono">sno-single</span>) recovered the host instantly, and
       a full regression pass on <span class="mono">sno-a</span>/<span class="mono">sno-b</span> came back
@@ -430,7 +448,8 @@ $ oc get nodes
       topology, report. Not yet wired into cloud CI (needs a self-hosted runner with real
       <span class="mono">virsh</span> access), but runs the same way locally.
     </p>
-    <table class="data">
+    <div class="table-wrap">
+    <table>
       <thead><tr><th>Script</th><th>Does</th></tr></thead>
       <tbody>
         <tr><td class="mono">wipe-all-sno.sh</td><td>Destroys/undefines every known SNO VM, cleans install dirs and <span class="mono">/etc/hosts</span></td></tr>
@@ -439,6 +458,7 @@ $ oc get nodes
         <tr><td class="mono">run-test-matrix.sh</td><td>Orchestrates all of the above end to end and writes a markdown report</td></tr>
       </tbody>
     </table>
+    </div>
     <p class="claim-note">
       <span class="mono">.github/workflows/sno-test-matrix.yml</span> runs <span class="mono">run-test-matrix.sh</span>
       on <span class="mono">workflow_dispatch</span>, on a self-hosted runner labeled

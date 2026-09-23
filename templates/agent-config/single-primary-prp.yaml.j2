@@ -71,8 +71,6 @@ hosts:
                 prefix-length: {{ prp_prefix_length }}
           ipv6:
             enabled: false
-{% endif %}
-{% if not (topology_needs_prp_nmconnection_workaround | default(false)) %}
       dns-resolver:
         config:
           server:
@@ -83,6 +81,7 @@ hosts:
             next-hop-address: {{ prp_lan_a_nat_gateway }}
             next-hop-interface: prp0
 {% endif %}
+
 {#
   Workaround mode (topology_needs_prp_nmconnection_workaround: true):
   DNS/routes for prp0 are NOT declared here at all - nmstate would reject

@@ -69,11 +69,6 @@
         src: "/tmp/openshift-client-linux.tar.gz"
         dest: "/usr/local/bin"
         remote_src: true
-        extra_opts:
-          - --transform
-          - s/oc/oc/
-          - --transform
-          - s/kubectl/kubectl/
         creates: /usr/local/bin/oc
 
     - name: Download OpenShift installer
@@ -87,9 +82,6 @@
         src: "/tmp/openshift-install-linux.tar.gz"
         dest: "/usr/local/bin"
         remote_src: true
-        extra_opts:
-          - --transform
-          - s/openshift-install/openshift-install/
         creates: /usr/local/bin/openshift-install
 
     - name: Ensure VM storage base directory exists on a filesystem with room
