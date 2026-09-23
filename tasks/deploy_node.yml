@@ -164,9 +164,9 @@
         state: present
         add_children:
           - host:
-              '@mac': "{{ node_macs.eth0 }}"
-              '@ip': "{{ node.ip_address }}"
-              '@name': "{{ node.hostname }}"
+              mac: "{{ node_macs.eth0 }}"
+              ip: "{{ node.ip_address }}"
+              name: "{{ node.hostname }}"
         pretty_print: true
       register: modified_net_xml
       changed_when: current_net_xml.get_xml != modified_net_xml.xmlstring
