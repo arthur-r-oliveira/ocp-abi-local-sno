@@ -1,19 +1,9 @@
-# Runs scripts/test-prp-failover.sh against the live sno-a/sno-b clusters.
-#
-# This CANNOT run on GitHub's hosted runners - the test needs `virsh` and
-# SSH access to real libvirt VMs, which only exist on the KVM host itself.
-# It needs a self-hosted runner registered ON that host (or one with
-# equivalent access to it), labeled "kvm-prp-lab" below - swap that label
-# for whatever you actually register, or point KUBECONFIG_A/B and
-# NODE_A_IP/NODE_B_IP (as repo/environment secrets or vars) at wherever
-# your deployment actually lives if it's not the defaults baked into the
-# script (which match vars/main.yml's out-of-the-box values).
 name: PRP failover test
 
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: "0 6 * * *"  # daily, catch drift even with no code changes
+    - cron: "0 6 * * *"
 
 jobs:
   prp-failover:
@@ -22,5 +12,86 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Collect cluster info
+        id: info
+        run: |
+          KUBECONFIG_A="/home/libvirt-images/sno-install/sno-a/auth/kubeconfig"
+          KUBECONFIG_B="/home/libvirt-images/sno-install/sno-b/auth/kubeconfig"
+
+          OCP_VERSION_A=$(KUBECONFIG="$KUBECONFIG_A" oc get clusterversion version -o jsonpath='{.status.desired.version}' 2>/dev/null || echo "unknown")
+          OCP_VERSION_B=$(KUBECONFIG="$KUBECONFIG_B" oc get clusterversion version -o jsonpath='{.status.desired.version}' 2>/dev/null || echo "unknown")
+          NODE_COUNT_A=$(KUBECONFIG="$KUBECONFIG_A" oc get nodes --no-headers 2>/dev/null | wc -l || echo 0)
+          NODE_COUNT_B=$(KUBECONFIG="$KUBECONFIG_B" oc get nodes --no-headers 2>/dev/null | wc -l || echo 0)
+
+          echo "ocp_version_a=$OCP_VERSION_A" >> "$GITHUB_OUTPUT"
+          echo "ocp_version_b=$OCP_VERSION_B" >> "$GITHUB_OUTPUT"
+          echo "node_count_a=$NODE_COUNT_A" >> "$GITHUB_OUTPUT"
+          echo "node_count_b=$NODE_COUNT_B" >> "$GITHUB_OUTPUT"
+
       - name: Run PRP failover test suite
-        run: ./scripts/test-prp-failover.sh
+        id: test
+        run: |
+          mkdir -p "${{ runner.temp }}/test-results"
+          ./scripts/test-prp-failover.sh 2>&1 | tee "${{ runner.temp }}/test-results/prp-failover.log"
+          TEST_RC=${PIPESTATUS[0]}
+          ./scripts/to-junit-xml.sh prp-failover < "${{ runner.temp }}/test-results/prp-failover.log" \
+            > "${{ runner.temp }}/test-results/prp-failover.xml"
+          exit $TEST_RC
+
+      - name: Generate job summary
+        if: always()
+        run: |
+          LOG="${{ runner.temp }}/test-results/prp-failover.log"
+          PASS=$(grep -c '^\[PASS\]' "$LOG" 2>/dev/null || echo 0)
+          FAIL=$(grep -c '^\[FAIL\]' "$LOG" 2>/dev/null || echo 0)
+          TOTAL=$((PASS + FAIL))
+
+          if [ "$FAIL" -eq 0 ]; then
+            BADGE="![pass](https://img.shields.io/badge/PRP_failover-${PASS}%2F${TOTAL}_passed-brightgreen)"
+          else
+            BADGE="![fail](https://img.shields.io/badge/PRP_failover-${FAIL}%2F${TOTAL}_failed-red)"
+          fi
+
+          {
+            echo "## $BADGE"
+            echo ""
+            echo "| Property | sno-a | sno-b |"
+            echo "|----------|-------|-------|"
+            echo "| OCP version | \`${{ steps.info.outputs.ocp_version_a }}\` | \`${{ steps.info.outputs.ocp_version_b }}\` |"
+            echo "| Nodes | ${{ steps.info.outputs.node_count_a }} | ${{ steps.info.outputs.node_count_b }} |"
+            echo "| Topology | dual-sidecar-prp | dual-sidecar-prp |"
+            echo ""
+            echo "### Test Results"
+            echo ""
+            echo "| Status | Test | Detail |"
+            echo "|--------|------|--------|"
+            while IFS= read -r line; do
+              case "$line" in
+                \[PASS\]*)
+                  rest="${line#\[PASS\] }"
+                  name="${rest%% - *}"
+                  detail=""
+                  [[ "$rest" == *" - "* ]] && detail="${rest#* - }"
+                  echo "| :white_check_mark: | \`${name}\` | ${detail} |"
+                  ;;
+                \[FAIL\]*)
+                  rest="${line#\[FAIL\] }"
+                  name="${rest%% - *}"
+                  detail=""
+                  [[ "$rest" == *" - "* ]] && detail="${rest#* - }"
+                  echo "| :x: | \`${name}\` | ${detail} |"
+                  ;;
+              esac
+            done < "$LOG"
+            echo ""
+            echo "---"
+            echo "_Runner: \`$(hostname)\` | $(date -u '+%Y-%m-%d %H:%M UTC')_"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prp-failover-results
+          path: ${{ runner.temp }}/test-results/
+          retention-days: 90
