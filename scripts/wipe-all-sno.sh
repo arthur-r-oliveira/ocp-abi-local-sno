@@ -20,6 +20,15 @@ VM_NAMES=(
   sno-prp-primary    # topology: single-primary-prp
 )
 
+# IPs that get fresh SSH host keys on every reinstall. Keep in sync with
+# vars/topologies/*.yml sno_nodes[].ip_address / prp_ip_address.
+KNOWN_HOST_IPS=(
+  192.168.130.101    # sno-a / sno-single  (ocp-public)
+  192.168.130.102    # sno-b               (ocp-public)
+  10.10.10.1         # sno-a / sno-prp-primary (prp0)
+  10.10.10.2         # sno-b               (prp0)
+)
+
 echo "== Wiping all known SNO VMs =="
 for vm in "${VM_NAMES[@]}"; do
   if virsh dominfo "$vm" >/dev/null 2>&1; then
@@ -46,6 +55,11 @@ for vm in "${VM_NAMES[@]}"; do
     echo "-> removing /etc/hosts entry for $vm"
     sed -i "/ api\.${vm}\./d" /etc/hosts
   fi
+done
+
+echo "== Clearing stale SSH host keys =="
+for ip in "${KNOWN_HOST_IPS[@]}"; do
+  ssh-keygen -R "$ip" 2>/dev/null && echo "-> removed known_hosts entry for $ip" || true
 done
 
 echo
