@@ -61,29 +61,39 @@ for pair in "sno-a:$KUBECONFIG_A" "sno-b:$KUBECONFIG_B"; do
   KUBECONFIG="$kc" oc apply -f day2-manifests/00-nmstate-catalogsource.yaml
   echo "  Applied CatalogSource (4.22 index)"
 
-  # 2. Namespace + OperatorGroup + Subscription
+  # 2. Wait for the catalog pod to become Ready. The 4.22 index is large
+  # and its gRPC cache build routinely takes longer than the default
+  # startup probe allows (100s). The pod restarts several times before
+  # the cache is warm enough to serve within the probe window — this is
+  # expected and documented in 00-nmstate-catalogsource.yaml.
+  if ! wait_for "${name} catalog pod Ready" 1200 \
+    "KUBECONFIG='$kc' oc get pod -n openshift-marketplace -l olm.catalogSource=redhat-operators-4-22 -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null | grep -q true"; then
+    echo "  WARNING: catalog pod not ready yet, continuing anyway (OLM may still resolve)"
+  fi
+
+  # 3. Namespace + OperatorGroup + Subscription
   KUBECONFIG="$kc" oc apply -f day2-manifests/01-nmstate-operator-subscription.yaml
   echo "  Applied Subscription"
 
-  # 3. Wait for CSV
-  if ! wait_for "${name} CSV Succeeded" 300 \
+  # 4. Wait for CSV
+  if ! wait_for "${name} CSV Succeeded" 600 \
     "KUBECONFIG='$kc' oc get csv -n openshift-nmstate -o jsonpath='{.items[0].status.phase}' 2>/dev/null | grep -q Succeeded"; then
     FAIL=1
     continue
   fi
 
-  # 4. NMState CR
+  # 5. NMState CR
   KUBECONFIG="$kc" oc apply -f day2-manifests/02-nmstate-cr.yaml
   echo "  Applied NMState CR"
 
-  # 5. Wait for handler DaemonSet
+  # 6. Wait for handler DaemonSet
   if ! wait_for "${name} nmstate-handler ready" 180 \
     "KUBECONFIG='$kc' oc get ds -n openshift-nmstate nmstate-handler -o jsonpath='{.status.numberReady}' 2>/dev/null | grep -qE '^[1-9]'"; then
     FAIL=1
     continue
   fi
 
-  # 6. MachineConfig for hsr module autoload
+  # 7. MachineConfig for hsr module autoload
   KUBECONFIG="$kc" oc apply -f day2-manifests/04-hsr-module-autoload.yaml
   echo "  Applied hsr module autoload MachineConfig"
   echo
@@ -102,7 +112,21 @@ KUBECONFIG="$KUBECONFIG_B" oc apply -f day2-manifests/03-nncp-sno-b.yaml
 echo "  Applied NNCP to sno-b"
 echo
 
-# 8. Wait for NNCPs to be Available
+# Wait for any MachineConfig-triggered reboots to complete before
+# checking NNCPs. The hsr module autoload MachineConfig causes MCO to
+# reboot each node; if we check too early, the API or SSH may be down.
+echo "--- Waiting for MachineConfig rollout (node reboots) ---"
+for pair in "sno-a:$KUBECONFIG_A" "sno-b:$KUBECONFIG_B"; do
+  name="${pair%%:*}"
+  kc="${pair#*:}"
+  if ! wait_for "${name} MachineConfigPool updated" 600 \
+    "KUBECONFIG='$kc' oc get mcp master -o jsonpath='{.status.conditions[?(@.type==\"Updated\")].status}' 2>/dev/null | grep -q True"; then
+    echo "  WARNING: ${name} MCP not yet Updated, continuing"
+  fi
+done
+echo
+
+# 9. Wait for NNCPs to be Available
 for pair in "sno-a:$KUBECONFIG_A" "sno-b:$KUBECONFIG_B"; do
   name="${pair%%:*}"
   kc="${pair#*:}"
