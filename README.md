@@ -1,5 +1,7 @@
 # ocp-abi-local-sno
 
+[![SNO test matrix (wipe + single + dual-sidecar-prp)](https://github.com/arthur-r-oliveira/ocp-abi-local-sno/actions/workflows/sno-test-matrix.yml/badge.svg)](https://github.com/arthur-r-oliveira/ocp-abi-local-sno/actions/workflows/sno-test-matrix.yml)
+
 Deploys **Single Node OpenShift** on a KVM/libvirt host via the agent-based
 installer, in three topologies selected by one Ansible var - from a plain
 baseline SNO up to a real Parallel Redundancy Protocol (PRP, RFC 62439-3)
