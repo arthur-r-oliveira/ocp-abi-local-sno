@@ -119,6 +119,14 @@ if [ -d "${STORAGE_BASE}/sno-install/sno-a" ] && [ -d "${STORAGE_BASE}/sno-insta
   phase_result "Install sno-a (bootstrap + operators)" $RC_A
   phase_result "Install sno-b (bootstrap + operators)" $RC_B
 
+  if [ "$RC_A" -eq 0 ] && [ "$RC_B" -eq 0 ]; then
+    run_logged "$LOG_DIR/day2-prp.log" "Day-2 PRP configuration (NMState operator + NNCPs)" \
+      ./scripts/apply-day2-prp.sh
+    phase_result "Day-2 PRP configuration" $?
+  else
+    append_report "- **Day-2 PRP configuration**: SKIP (install failed)"
+  fi
+
   run_logged "$LOG_DIR/test-prp-failover.log" "PRP failover suite" \
     ./scripts/test-prp-failover.sh
   phase_result "PRP failover suite (health, prp0 mode, reachability, failover, node_table)" $?
