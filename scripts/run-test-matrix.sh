@@ -136,8 +136,9 @@ else
 fi
 
 echo
-echo "############ Wipe (post-matrix) ############"
-./scripts/wipe-all-sno.sh
+echo "############ Post-matrix ############"
+echo "Skipping post-matrix wipe: leaving the last topology (dual-sidecar-prp)"
+echo "running for downstream pipelines (e.g. must-gather-operator)."
 echo
 
 append_report ""
