@@ -93,9 +93,19 @@
     dest: "{{ node.install_dir }}/agent-config.yaml"
     mode: '0644'
 
-- name: "[{{ node.vm_name }}] Create Agent Installer ISO and assets"
-  ansible.builtin.command:
-    cmd: "openshift-install agent create image --dir={{ node.install_dir }} --log-level=debug"
+- name: "[{{ node.vm_name }}] Create Agent Installer ISO and assets (with retry for transient network errors)"
+  ansible.builtin.shell: |
+    set -uo pipefail
+    for attempt in 1 2 3; do
+      if openshift-install agent create image --dir={{ node.install_dir }} --log-level=debug 2>&1; then
+        exit 0
+      fi
+      [ "$attempt" -lt 3 ] || exit 1
+      echo "Attempt $attempt/3 failed, retrying in 30s..."
+      rm -f "{{ node.install_dir }}/agent.x86_64.iso"
+      sleep 30
+    done
+  args:
     creates: "{{ node.install_dir }}/agent.x86_64.iso"
   register: iso_result
 
