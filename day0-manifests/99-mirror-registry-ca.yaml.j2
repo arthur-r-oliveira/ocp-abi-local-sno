@@ -1,0 +1,19 @@
+{% if mirror_registry is defined %}
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  name: 99-mirror-registry-ca
+  labels:
+    machineconfiguration.openshift.io/role: master
+spec:
+  config:
+    ignition:
+      version: 3.2.0
+    storage:
+      files:
+        - path: /etc/pki/ca-trust/source/anchors/mirror-registry-ca.crt
+          mode: 0644
+          overwrite: true
+          contents:
+            source: "data:text/plain;base64,{{ lookup('file', mirror_registry_ca_path) | b64encode }}"
+{% endif %}

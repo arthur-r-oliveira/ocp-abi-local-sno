@@ -80,6 +80,13 @@
     mode: '0644'
   when: (topology_needs_day0_extra_manifests | default(false)) and (mirror_registry is defined)
 
+- name: "[{{ node.vm_name }}] Place mirror registry CA as a Day-0 extra manifest"
+  ansible.builtin.template:
+    src: day0-manifests/99-mirror-registry-ca.yaml.j2
+    dest: "{{ node.install_dir }}/openshift/99-mirror-registry-ca.yaml"
+    mode: '0644'
+  when: (topology_needs_day0_extra_manifests | default(false)) and (mirror_registry is defined)
+
 - name: "[{{ node.vm_name }}] Create agent-config.yaml now that we have MAC addresses"
   ansible.builtin.template:
     src: "{{ agent_config_template }}"

@@ -23,24 +23,3 @@ platform:
   none: {}
 pullSecret: '{{ sno_pull_secret_combined }}'
 sshKey: '{{ lookup("file", ssh_public_key_path) }}'
-{% if mirror_registry is defined %}
-additionalTrustBundle: |
-{{ lookup("file", "/etc/pki/tls/certs/ca-bundle.crt") | indent(2, first=true) }}
-{{ lookup("file", mirror_registry_ca_path) | indent(2, first=true) }}
-imageDigestSources:
-  - mirrors:
-      - {{ mirror_registry }}/openshift4/kubernetes-nmstate-operator-bundle
-    source: registry.redhat.io/openshift4/kubernetes-nmstate-operator-bundle
-  - mirrors:
-      - {{ mirror_registry }}/openshift4/nmstate-console-plugin-rhel9
-    source: registry.redhat.io/openshift4/nmstate-console-plugin-rhel9
-  - mirrors:
-      - {{ mirror_registry }}/openshift4/kubernetes-nmstate-rhel9-operator
-    source: registry.redhat.io/openshift4/kubernetes-nmstate-rhel9-operator
-  - mirrors:
-      - {{ mirror_registry }}/openshift4/ose-kubernetes-nmstate-handler-rhel9
-    source: registry.redhat.io/openshift4/ose-kubernetes-nmstate-handler-rhel9
-  - mirrors:
-      - {{ mirror_registry }}/openshift4/ose-kube-rbac-proxy-rhel9
-    source: registry.redhat.io/openshift4/ose-kube-rbac-proxy-rhel9
-{% endif %}
