@@ -25,6 +25,7 @@ pullSecret: '{{ sno_pull_secret_combined }}'
 sshKey: '{{ lookup("file", ssh_public_key_path) }}'
 {% if mirror_registry is defined %}
 additionalTrustBundle: |
+{{ lookup("file", "/etc/pki/tls/certs/ca-bundle.crt") | indent(2, first=true) }}
 {{ lookup("file", mirror_registry_ca_path) | indent(2, first=true) }}
 imageDigestSources:
   - mirrors:
