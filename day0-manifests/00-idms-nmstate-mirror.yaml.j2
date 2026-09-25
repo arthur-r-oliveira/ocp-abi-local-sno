@@ -1,0 +1,25 @@
+{% if mirror_registry is defined %}
+apiVersion: config.openshift.io/v1
+kind: ImageDigestMirrorSet
+metadata:
+  labels:
+    operators.openshift.org/catalog: "true"
+  name: nmstate-mirror
+spec:
+  imageDigestMirrors:
+    - mirrors:
+        - {{ mirror_registry }}/openshift4/kubernetes-nmstate-operator-bundle
+      source: registry.redhat.io/openshift4/kubernetes-nmstate-operator-bundle
+    - mirrors:
+        - {{ mirror_registry }}/openshift4/nmstate-console-plugin-rhel9
+      source: registry.redhat.io/openshift4/nmstate-console-plugin-rhel9
+    - mirrors:
+        - {{ mirror_registry }}/openshift4/kubernetes-nmstate-rhel9-operator
+      source: registry.redhat.io/openshift4/kubernetes-nmstate-rhel9-operator
+    - mirrors:
+        - {{ mirror_registry }}/openshift4/ose-kubernetes-nmstate-handler-rhel9
+      source: registry.redhat.io/openshift4/ose-kubernetes-nmstate-handler-rhel9
+    - mirrors:
+        - {{ mirror_registry }}/openshift4/ose-kube-rbac-proxy-rhel9
+      source: registry.redhat.io/openshift4/ose-kube-rbac-proxy-rhel9
+{% endif %}

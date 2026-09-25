@@ -42,3 +42,15 @@ oc_url: "{{ ocp_release_url }}/openshift-client-linux.tar.gz"
 openshift_install_url: "{{ ocp_release_url }}/openshift-install-linux.tar.gz"
 pull_secret_path: "/root/secrets/pull-secret.json"
 ssh_public_key_path: "/root/secrets/sno_id_ed25519.pub"
+
+# Mirror registry for disconnected Day-2 operator installation.
+# A pruned catalog index (NMState-only) and all operator images are
+# pre-mirrored here so the SNO nodes pull from the LAN instead of the
+# internet, avoiding the 10-20 minute catalog-pod startup that was
+# causing CI timeouts. See scripts/mirror-nmstate-operator.sh.
+mirror_registry_host: "hpe-xl230agen9-01.khw.eng.rdu2.dc.redhat.com"
+mirror_registry_port: 8443
+mirror_registry: "{{ mirror_registry_host }}:{{ mirror_registry_port }}"
+mirror_registry_ca_path: "/root/secrets/mirror-registry/ca.crt"
+mirror_registry_user: "mirror"
+mirror_registry_pass: "mirror-pass"

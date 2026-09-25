@@ -1,20 +1,19 @@
-# WORKAROUND, not part of the intended design: as of OCP 5.0.0-rc.2,
-# kubernetes-nmstate-operator is not published in ANY default catalog
-# (redhat-operators/certified-operators/community-operators all checked -
-# 0 hits, despite catalogs being healthy with 85-261 other packages each).
-# This is almost certainly a pre-GA catalog gap, not a permanent removal.
+# Pruned catalog index containing ONLY kubernetes-nmstate-operator,
+# served from the local mirror registry on the bastion host. This
+# replaces the full registry.redhat.io/redhat/redhat-operator-index:v4.22
+# that previously caused 10-20 minute catalog-pod startup times (and
+# frequent CI timeouts on sno-b) because parsing+caching 151 operators
+# is expensive. The pruned index caches in seconds.
 #
-# The 4.22 redhat-operators index (the last 4.x release before 5.0) still
-# carries it, and OLM on 5.0 can resolve/install it fine from there - see
-# docs/prp-test-case.md for the full investigation, including why the
-# catalog pod needs a few restart cycles before its gRPC server actually
-# starts serving (a slow first-run cache build racing an impatient
-# startup probe, not a real failure).
-#
-# Once kubernetes-nmstate-operator appears in OCP 5.0's own default
-# redhat-operators catalog, delete this CatalogSource and point
-# 01-nmstate-operator-subscription.yaml's spec.source back at
+# WORKAROUND context (still applies): as of OCP 5.0.0-rc.2,
+# kubernetes-nmstate-operator is not published in ANY default catalog.
+# The 4.22 redhat-operators index (last 4.x) still carries it and OLM
+# on 5.0 installs it fine. Once it appears in OCP 5.0's own catalog,
+# delete this CatalogSource and point the Subscription back at
 # "redhat-operators".
+#
+# Mirror refresh: run scripts/mirror-nmstate-operator.sh on the KVM
+# host whenever the v4.22 index is updated (roughly every 2 weeks).
 apiVersion: operators.coreos.com/v1alpha1
 kind: CatalogSource
 metadata:
@@ -22,6 +21,6 @@ metadata:
   namespace: openshift-marketplace
 spec:
   sourceType: grpc
-  image: registry.redhat.io/redhat/redhat-operator-index:v4.22
-  displayName: Red Hat Operators (4.22 index, for kubernetes-nmstate-operator)
+  image: hpe-xl230agen9-01.khw.eng.rdu2.dc.redhat.com:8443/redhat/redhat-operator-index:v4.22-nmstate-only
+  displayName: Red Hat Operators (4.22 pruned, NMState only - local mirror)
   publisher: Red Hat
