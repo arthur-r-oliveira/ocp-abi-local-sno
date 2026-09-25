@@ -15,11 +15,10 @@ topology_mac_names: ['eth0', 'eth1', 'eth2']
 topology_needs_static_dhcp: true
 topology_static_dhcp_network: "{{ net_ocp_public }}"
 
-# No Day-0 extra manifests needed here - PRP is a side network, not
-# load-bearing for cluster bring-up, so the known Day-0 HSR/PRP bug is
-# just a missing side interface (fixed Day-2 via kubernetes-nmstate-operator,
-# see day2-manifests/), not a blocker to the install itself.
-topology_needs_day0_extra_manifests: false
+# Day-0 extra manifests carry the IDMS for the mirror registry so the
+# cluster knows to pull NMState operator images from the local mirror
+# instead of registry.redhat.io. PRP itself is still configured Day-2.
+topology_needs_day0_extra_manifests: true
 
 # --- Libvirt networks ---------------------------------------------------
 # ocp-public is a NAT network shared by both nodes; prp-lan-a/prp-lan-b are

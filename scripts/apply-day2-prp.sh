@@ -57,16 +57,15 @@ for pair in "sno-a:$KUBECONFIG_A" "sno-b:$KUBECONFIG_B"; do
   kc="${pair#*:}"
   echo "--- ${name}: installing NMState operator ---"
 
-  # 1. CatalogSource
+  # 1. CatalogSource (pruned index from the local mirror registry —
+  # contains only kubernetes-nmstate-operator, so the gRPC cache builds
+  # in seconds instead of the 10-20 minutes the full v4.22 index took).
   KUBECONFIG="$kc" oc apply -f day2-manifests/00-nmstate-catalogsource.yaml
-  echo "  Applied CatalogSource (4.22 index)"
+  echo "  Applied CatalogSource (pruned 4.22 index from mirror)"
 
-  # 2. Wait for the catalog pod to become Ready. The 4.22 index is large
-  # and its gRPC cache build routinely takes longer than the default
-  # startup probe allows (100s). The pod restarts several times before
-  # the cache is warm enough to serve within the probe window — this is
-  # expected and documented in 00-nmstate-catalogsource.yaml.
-  if ! wait_for "${name} catalog pod Ready" 1200 \
+  # 2. Wait for the catalog pod to become Ready. With the pruned index
+  # from the local mirror, this should take ~30-60s instead of 10-20min.
+  if ! wait_for "${name} catalog pod Ready" 300 \
     "KUBECONFIG='$kc' oc get pod -n openshift-marketplace -l olm.catalogSource=redhat-operators-4-22 -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null | grep -q true"; then
     echo "  WARNING: catalog pod not ready yet, continuing anyway (OLM may still resolve)"
   fi

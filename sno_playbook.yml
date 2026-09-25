@@ -8,6 +8,19 @@
     - "vars/topologies/{{ sno_topology }}.yml"
 
   tasks:
+    - name: Build combined pull-secret with mirror registry credentials
+      ansible.builtin.set_fact:
+        sno_pull_secret_combined: >-
+          {{ lookup("file", pull_secret_path) | from_json
+             | combine({"auths": {mirror_registry: {"auth": (mirror_registry_user ~ ":" ~ mirror_registry_pass) | b64encode}}}, recursive=true)
+             | to_json }}
+      when: mirror_registry is defined
+
+    - name: Fall back to unmodified pull-secret when no mirror is configured
+      ansible.builtin.set_fact:
+        sno_pull_secret_combined: "{{ lookup('file', pull_secret_path) }}"
+      when: mirror_registry is not defined
+
     - name: Install required packages
       ansible.builtin.dnf:
         name:
