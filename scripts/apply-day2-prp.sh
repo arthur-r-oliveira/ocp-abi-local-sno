@@ -33,17 +33,17 @@ FAIL=0
 
 wait_for() {
   local desc="$1" timeout="$2" cmd="$3"
-  echo "  Waiting up to ${timeout}s for ${desc}..."
+  echo "  Waiting up to ${timeout}s for ${desc}..." >&2
   local elapsed=0
   while [ $elapsed -lt "$timeout" ]; do
     if eval "$cmd" >/dev/null 2>&1; then
-      echo "  ${desc}: ready (${elapsed}s)"
+      echo "  ${desc}: ready (${elapsed}s)" >&2
       return 0
     fi
     sleep 10
     elapsed=$((elapsed + 10))
   done
-  echo "  ERROR: ${desc} not ready after ${timeout}s"
+  echo "  ERROR: ${desc} not ready after ${timeout}s" >&2
   return 1
 }
 
@@ -53,9 +53,9 @@ wait_for() {
 install_via_olm() {
   local kc="$1" name="$2" catalog="$3" catalog_ns="$4"
 
-  echo "  Using OLM: catalog=${catalog} (${catalog_ns})"
+  echo "  Using OLM: catalog=${catalog} (${catalog_ns})" >&2
 
-  KUBECONFIG="$kc" oc apply -f - <<EOF
+  KUBECONFIG="$kc" oc apply -f - >&2 <<EOF
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -90,7 +90,7 @@ EOF
     return 1
   fi
 
-  echo "  Downstream operator installed via OLM (${catalog})"
+  echo "  Downstream operator installed via OLM (${catalog})" >&2
   echo "openshift-nmstate"
 }
 
@@ -100,24 +100,24 @@ EOF
 install_upstream() {
   local kc="$1" name="$2"
 
-  echo "  Falling back to upstream kubernetes-nmstate ${NMSTATE_VERSION}"
+  echo "  Falling back to upstream kubernetes-nmstate ${NMSTATE_VERSION}" >&2
 
   for manifest in nmstate.io_nmstates.yaml namespace.yaml service_account.yaml role.yaml role_binding.yaml operator.yaml; do
-    KUBECONFIG="$kc" oc apply -f "${NMSTATE_BASE_URL}/${manifest}"
+    KUBECONFIG="$kc" oc apply -f "${NMSTATE_BASE_URL}/${manifest}" >&2
   done
 
   # Upstream handler DaemonSet runs privileged containers — grant SCC
   KUBECONFIG="$kc" oc adm policy add-scc-to-user privileged \
-    system:serviceaccount:nmstate:nmstate-operator -n nmstate 2>/dev/null || true
+    system:serviceaccount:nmstate:nmstate-operator -n nmstate >&2 2>&1 || true
   KUBECONFIG="$kc" oc adm policy add-scc-to-user privileged \
-    system:serviceaccount:nmstate:nmstate-handler -n nmstate 2>/dev/null || true
+    system:serviceaccount:nmstate:nmstate-handler -n nmstate >&2 2>&1 || true
 
   if ! wait_for "${name} nmstate-operator ready" 300 \
     "KUBECONFIG='$kc' oc get deploy -n nmstate nmstate-operator -o jsonpath='{.status.readyReplicas}' 2>/dev/null | grep -qE '^[1-9]'"; then
     return 1
   fi
 
-  echo "  Upstream operator installed from GitHub releases"
+  echo "  Upstream operator installed from GitHub releases" >&2
   echo "nmstate"
 }
 
