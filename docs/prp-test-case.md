@@ -389,3 +389,73 @@ not a dead end.
   needs to address - but the underlying nmstate schema it confirms
   (`port1`/`port2`/`protocol`/`copy-mac-from`) is exactly what both paths
   ultimately rely on.
+
+## Testing & Validation
+
+### Automated
+
+```bash
+./scripts/test-prp-failover.sh
+```
+
+Runs all 5 checks below in sequence. Exit 0 = all passed. All defaults match `vars/main.yml`; override via env vars if needed (`NODE_A_IP`, `KUBECONFIG_A`, etc.).
+
+### Manual sanity checks
+
+#### 1. Cluster health
+
+```bash
+KUBECONFIG=/home/libvirt-images/sno-install/sno-a/auth/kubeconfig oc get clusterversion
+KUBECONFIG=/home/libvirt-images/sno-install/sno-a/auth/kubeconfig oc get co | awk '$3!="True" || $4!="False" || $5!="False"'
+```
+
+Repeat with sno-b's kubeconfig. Expect: `Available=True`, no unhealthy operators.
+
+#### 2. prp0 interface and protocol mode
+
+```bash
+ssh core@192.168.130.101 "ip -d link show prp0"
+ssh core@192.168.130.102 "ip -d link show prp0"
+```
+
+Expect: `proto 1` (PRP). If `proto 0`, the interface fell back to HSR mode.
+
+#### 3. Cross-node reachability over prp0
+
+```bash
+ssh core@192.168.130.101 "ping -c5 -W2 10.10.10.2"
+```
+
+Expect: 0% packet loss.
+
+#### 4. Failover (hypervisor-level link cut)
+
+This tests that cutting one PRP path causes zero packet loss — the defining property of PRP.
+
+```bash
+# Find sno-a's MAC on prp-lan-a
+virsh domiflist sno-a
+# Note the MAC address for the prp-lan-a network
+
+# Start continuous ping from sno-a to sno-b over prp0
+ssh core@192.168.130.101 "ping -i 0.2 -w 20 10.10.10.2" &
+
+# After ~3 seconds, cut the link
+virsh domif-setlink sno-a <MAC> down
+
+# After ~8 seconds, restore it
+virsh domif-setlink sno-a <MAC> up
+
+# Wait for ping to finish — check output
+```
+
+Expect: 0% packet loss despite the link being down for ~8 seconds.
+
+#### 5. PRP node table (kernel-level peer registration)
+
+```bash
+ssh core@192.168.130.101 "sudo cat /sys/kernel/debug/hsr/prp0/node_table"
+ssh core@192.168.130.102 "sudo cat /sys/kernel/debug/hsr/prp0/node_table"
+```
+
+Expect: at least one entry showing the peer's MAC address. An empty table means PRP is configured but the nodes haven't seen each other at the protocol level.
