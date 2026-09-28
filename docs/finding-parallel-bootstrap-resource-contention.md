@@ -12,7 +12,7 @@ When both SNO nodes (sno-a and sno-b) bootstrap simultaneously on the same KVM h
 
 | Resource | Value |
 |----------|-------|
-| Hypervisor | hypervisor-a |
+| Hypervisor | hypervisor.lab.local |
 | CPU | 2x Intel Xeon E5-2699 v3 @ 2.30GHz (36 cores / 72 threads) |
 | Host RAM | 46 GiB + 24 GiB swap |
 | VM allocation (each) | 8 vCPU + 16 GiB RAM |
