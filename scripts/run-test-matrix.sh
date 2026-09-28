@@ -102,21 +102,30 @@ run_logged "$LOG_DIR/deploy-dual.log" "Deploy (dual-sidecar-prp)" \
   ansible-playbook sno_playbook.yml -e sno_topology=dual-sidecar-prp
 phase_result "Deploy" $?
 
-# Both nodes bootstrap independently - wait for them in parallel rather
-# than doubling the wall-clock time waiting sequentially.
+# Stagger bootstrap to avoid hypervisor resource contention: the deploy
+# step starts both VMs, so we immediately power off sno-b, let sno-a
+# finish its install (the heavy phase: etcd, static pods, operators),
+# then start sno-b for its turn. Adds ~1h wall-clock vs parallel, but
+# eliminates the kube-apiserver timeout failures we saw when both VMs
+# competed for disk I/O and memory on the same host.
+# See docs/finding-parallel-bootstrap-resource-contention.md.
 if [ -d "${STORAGE_BASE}/sno-install/sno-a" ] && [ -d "${STORAGE_BASE}/sno-install/sno-b" ]; then
+  echo "Staggering bootstrap: shutting down sno-b while sno-a installs..."
+  virsh destroy sno-b 2>/dev/null || true
+
   timeout 5400 openshift-install agent wait-for install-complete \
     --dir="${STORAGE_BASE}/sno-install/sno-a" --log-level=info \
-    > "$LOG_DIR/install-sno-a.log" 2>&1 &
-  PID_A=$!
+    > "$LOG_DIR/install-sno-a.log" 2>&1
+  RC_A=$?
+  phase_result "Install sno-a (bootstrap + operators)" $RC_A
+
+  echo "Starting sno-b now that sno-a is done..."
+  virsh start sno-b
+
   timeout 5400 openshift-install agent wait-for install-complete \
     --dir="${STORAGE_BASE}/sno-install/sno-b" --log-level=info \
-    > "$LOG_DIR/install-sno-b.log" 2>&1 &
-  PID_B=$!
-
-  wait "$PID_A"; RC_A=$?
-  wait "$PID_B"; RC_B=$?
-  phase_result "Install sno-a (bootstrap + operators)" $RC_A
+    > "$LOG_DIR/install-sno-b.log" 2>&1
+  RC_B=$?
   phase_result "Install sno-b (bootstrap + operators)" $RC_B
 
   if [ "$RC_A" -eq 0 ] && [ "$RC_B" -eq 0 ]; then
