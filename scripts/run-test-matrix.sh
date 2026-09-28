@@ -55,7 +55,7 @@ phase_result() {
 append_report "# SNO Test Matrix Report"
 append_report ""
 append_report "Generated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-append_report "Host: $(hostname)"
+append_report "Host: kvm-prp-lab"
 append_report ""
 
 # =========================================================================

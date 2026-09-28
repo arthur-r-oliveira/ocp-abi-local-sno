@@ -85,7 +85,7 @@ jobs:
             done < "$LOG"
             echo ""
             echo "---"
-            echo "_Runner: \`$(hostname)\` | $(date -u '+%Y-%m-%d %H:%M UTC')_"
+            echo "_Runner: \`kvm-prp-lab\` | $(date -u '+%Y-%m-%d %H:%M UTC')_"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload test results

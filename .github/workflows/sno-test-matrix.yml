@@ -50,7 +50,7 @@ jobs:
             echo ""
             echo "| Property | Value |"
             echo "|----------|-------|"
-            echo "| Host | \`$(hostname)\` |"
+            echo "| Host | \`kvm-prp-lab\` |"
             echo "| Runner | \`kvm-prp-lab\` |"
             echo "| Date | $(date -u '+%Y-%m-%d %H:%M UTC') |"
             echo ""
