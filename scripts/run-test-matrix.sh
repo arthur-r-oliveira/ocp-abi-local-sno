@@ -139,6 +139,16 @@ if [ -d "${STORAGE_BASE}/sno-install/sno-a" ] && [ -d "${STORAGE_BASE}/sno-insta
   run_logged "$LOG_DIR/test-prp-failover.log" "PRP failover suite" \
     ./scripts/test-prp-failover.sh
   phase_result "PRP failover suite (health, prp0 mode, reachability, failover, node_table)" $?
+
+  # The failover suite above proves PRP with ping - about 1 packet/sec. This
+  # runs the Quarkus UDP benchmark at 5000 msg/s (~1.5M packets) and cuts each
+  # PRP LAN in turn while traffic flows, asserting both that loss stays zero
+  # and that each cut actually degraded redundancy. The latter matters because
+  # PRP masks a dead LAN so completely that a zero-loss assertion alone would
+  # pass even if the cut silently never happened.
+  run_logged "$LOG_DIR/test-prp-bench.log" "PRP UDP benchmark under dual link cuts" \
+    ./scripts/test-prp-bench.sh
+  phase_result "PRP UDP benchmark (300s at 5000 msg/s, 2 link cuts, zero loss)" $?
 else
   append_report "- **Install**: FAIL (deploy did not produce install directories)"
   OVERALL_FAIL=1
