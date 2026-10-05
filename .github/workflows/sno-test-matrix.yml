@@ -24,6 +24,10 @@ jobs:
           # checkout cannot write outside the workspace, so the default
           # sibling-directory guess in test-prp-bench.sh never resolves here.
           PRP_BENCH_REPO: ${{ github.workspace }}/quarkus-prp-bench
+          # The repo commits a placeholder registry host, so the lab's real
+          # one comes from here. A secret rather than a variable only so it
+          # is masked if some future step ever echoes it.
+          MIRROR_REGISTRY_HOST: ${{ secrets.MIRROR_REGISTRY_HOST }}
         run: |
           mkdir -p "${{ runner.temp }}/test-results"
           ./scripts/run-test-matrix.sh "${{ runner.temp }}/sno-test-matrix-report.md" 2>&1 \
