@@ -14,34 +14,54 @@ Last updated: 2026-10-06.
 
 ## TL;DR
 
-**PRP (IEC 62439-3) works on OpenShift SNO, and we can now prove it
-repeatably and automatically. One real product defect blocks the Day-0
-path, and we have a root cause and a proposed upstream fix for it.**
+**PRP (IEC 62439-3) redundancy works on OpenShift SNO and is now proven
+automatically and repeatably. A single upstream `nmstate` defect blocks
+Day-0 entirely - and in the topology this RFE is really about, it leaves
+the node with no network at all. We have the root cause, a five-line fix,
+and four reports drafted.**
 
-- **Validated** on OCP **5.0.0-rc.2** (RHCOS / RHEL 10.2) and **4.19.45**,
-  two SNO clusters joined by a kernel `hsr` PRP link.
-- **Zero packet loss across deliberate link cuts**, now demonstrated at
-  scale: **1.5M UDP packets over 5 minutes with two 30-second LAN outages
-  mid-run, no sequence gaps**, sub-millisecond RTT (p50 434 us).
-- **Day-0 is blocked by an upstream `nmstate` defect.** PRP cannot be
-  configured by the agent-based installer: `nmstate`'s offline keyfile
+- **Validated** on OCP **5.0.0-rc.2** (RHCOS / RHEL 10.2) and **4.19.45**:
+  two SNO clusters joined by a kernel `hsr` PRP link, correct at the
+  protocol level (`proto 1`, identical counters on both ports, peer
+  registered `DAN-P: 1` from real supervision frames).
+- **Redundancy holds under load.** Cutting either LAN for 30 seconds
+  mid-run, at 1500 and 5000 msg/s, the surviving path carries the full
+  rate and recovers - **4/4 runs, 8/8 redundancy assertions in CI**.
+  Sub-millisecond RTT (p50 434 us).
+- **The absolute "zero packet loss" claim is not yet reproducible.** Best
+  run is real: 1.5M packets, no sequence gaps, through two outages. But
+  across four runs it passed twice and failed twice, at 0.29-0.4% loss.
+  One failure is explained (receiver socket buffer); **one is not**. See
+  [the open item](#open-zero-loss-is-intermittent). This does not affect
+  the redundancy result, but we cannot assert zero loss on demand today.
+- **Day-0 is blocked by an upstream `nmstate` defect.** Its offline keyfile
   writer has no `hsr` branch, so the generated profile is invalid and
-  `prp0` never exists at first boot. Reproducible with stock `nmstatectl`,
-  no OpenShift involved. We have the root cause in the source and a
-  five-line proposed fix.
-- **Day-2 works and is the supported-looking path.**
-  `kubernetes-nmstate-operator` + an NNCP produces a correct `prp0`,
-  matching the approach Red Hat's own HSR/PRP KB recommends.
-- **Fully automated**: 3 CI workflows on a self-hosted KVM lab, from bare
-  metal to a passing PRP failover and benchmark, reporting to a public
-  dashboard. **14 runs, 132 test executions, 95.5% pass rate.**
-- **Three defect reports are drafted and ready to file** (one upstream
-  `nmstate`, two OpenShift-side). They are not filed yet - that is the main
-  thing awaiting a decision.
+  `prp0` never exists at first boot. **Not an OpenShift bug** -
+  reproducible with stock `nmstatectl`, no installer involved.
+  **Severity depends on topology**: as a side network the interface is
+  silently absent and recoverable Day-2; as the **primary or only
+  address-bearing interface - the substation/rail case this RFE targets -
+  the node comes up with no connectivity whatsoever.** No DNS, no
+  registry, no SSH; diagnosis needs a `dracut` shell on the console. A
+  schema-valid config is accepted without complaint and silently does
+  nothing.
+- **Day-2 works and matches Red Hat's own guidance.**
+  `kubernetes-nmstate-operator` + an NNCP produces a correct `prp0` - the
+  approach our HSR/PRP KB explicitly recommends.
+- **Fully automated**: 3 CI workflows on a self-hosted KVM lab, bare metal
+  to passing failover and benchmark, publishing to a dashboard.
+  **15 runs, 146 test executions, 95.2%.**
+- **Four reports drafted, none filed**, with a deliberate order: **RHEL
+  Jira first** (it is what creates a backport into a shipped package),
+  then the upstream fix, then the two OpenShift-side items. Note Bugzilla
+  is retired for new RHEL and OpenShift product bugs - these go to Jira at
+  issues.redhat.com.
 
-**What we need from the RFE**: a steer on filing the three reports through
-the right channels, and confirmation of which topologies matter for GA
-(Test Case 3 and TNF are specified but not yet passing - see
+**Asks**: (1) go-ahead to file, and a steer on the RHEL Jira since that is
+the one that produces a shipped fix; (2) confirmation that
+`kubernetes-nmstate-operator` lands in OCP 5.0's default catalog before GA
+- it is currently in none of the three; (3) which topologies matter for GA
+(Test Case 3 and TNF are specified but not passing - see
 [Not yet proven](#not-yet-proven)).
 
 ---
@@ -81,8 +101,7 @@ test than the KB's own example.
 | Test | Traffic | Result |
 |---|---|---|
 | `ping` failover, 8s outage | ~1 pkt/s | 97/97 packets, 0% loss |
-| UDP benchmark, two 30s outages | 1500 msg/s, 450k packets | no sequence gaps, 14/14 assertions |
-| UDP benchmark, two 30s outages | 5000 msg/s, 1.5M packets | no sequence gaps, 14/14 assertions |
+| UDP benchmark, two 30s outages | 1500 and 5000 msg/s | **redundancy assertions 4/4 runs**; zero-loss 2/4 |
 
 **The zero-loss number alone would be worthless, and we treat it that
 way.** PRP masks a dead LAN so completely that a test which cuts a link and
@@ -90,7 +109,26 @@ checks only for 0% loss passes identically whether the cut happened or
 silently failed - verified by stubbing the cut to a no-op and watching
 zero-loss still pass. Every run therefore also asserts that each cut
 *actually degraded redundancy* and then recovered. Those assertions are
-what make the result evidence.
+what make the result evidence - and they are the ones that pass
+consistently.
+
+### Open: zero-loss is intermittent
+
+Across four benchmark runs, `zero-loss` passed twice and failed twice
+(0.29% and 0.4%). The two failures have different causes: the 5000 msg/s
+one came with 1,020 `udpRcvbufErrors` and is the receiver's socket buffer
+discarding datagrams *after* they arrived - our harness, not the product.
+The 1500 msg/s one had **no kernel drops at all** and real mid-stream
+sequence gaps, and is **not yet explained**.
+
+Stated plainly for the RFE: **PRP redundancy behaviour is solid and
+repeatable; the absolute zero-loss claim is not yet something we can
+assert on demand.** Candidates still open are sender-side pacing, the
+`hsr` driver's duplicate-discard under sustained load, virtio/vhost queue
+behaviour on this host, or prp-bench itself. Next step is repeated runs
+correlated against the sample timeline, to see whether losses cluster
+around the cut windows (which would implicate PRP) or spread through the
+run (which would not). Detail: `docs/prp-test-case.md`.
 
 ### Automated end to end
 
@@ -102,8 +140,20 @@ per-test and per-run history.
 
 ## Defects found
 
-Three are drafted and **ready to file, not yet filed**. Drafts are in this
-repo.
+**Four reports drafted, none filed.** Two of them are the same `nmstate`
+defect aimed at two different places, deliberately - and the order matters:
+
+| Order | Report | Target | Why |
+|---|---|---|---|
+| 1 | `rhel-jira-nmstate-hsr-gen-conf.md` | Jira, project **RHEL**, component **nmstate** | Creates the backport path into a shipped package. An upstream merge alone delivers nothing to RHEL 10.2. |
+| 2 | `upstream-issue-1-nmstate-hsr-gen-conf.md` | github.com/nmstate/nmstate | Where the code must land regardless - the RHEL package is a rebase of upstream, so a downstream-only fix is dropped at the next rebase. Five lines from an existing template, so likely a PR rather than an issue. |
+| 3 | `upstream-issue-2-agent-based-installer-hsr.md` | Jira, project **OCPBUGS**, component **Assisted Installer** | Downstream tracking, so OpenShift has its own record of why Day-0 PRP fails. |
+| 4 | `upstream-issue-3-assisted-installer-agent-hsr-inventory.md` | github.com/openshift/assisted-installer-agent (or OCPBUGS) | A separate defect, found while working around the first. |
+
+**Bugzilla is retired** for new RHEL and OpenShift product bugs; all the
+internal paths above are Jira at issues.redhat.com. No customer case is
+attached to any of these - they were found during enablement testing and
+would be filed proactively.
 
 ### 1. `nmstate`: no `hsr` support in offline keyfile generation (the blocker)
 
@@ -116,6 +166,23 @@ Effect: the generated `prp0.nmconnection` has `type=hsr` but no `[hsr]`
 section, NetworkManager refuses to load it
 (`hsr: setting required for connection of type 'hsr'`), and `prp0` does not
 exist after first boot.
+
+**Severity is topology-dependent, and the bad case is the one this RFE
+cares about:**
+
+- `hsr` as a *secondary* interface (our Test Case 2): the node boots
+  normally and the PRP interface is silently absent. Recoverable Day-2.
+- `hsr` as the *primary or only address-bearing* interface (Test Case 3 -
+  the substation / rail / IEC 62439-3 control-network case, where the
+  entire point is protecting the one link that matters): **the node has no
+  network connectivity at all.** No DNS, no reachable registry, no SSH.
+  Diagnosis requires `rd.break` into a `dracut` emergency shell on the
+  console, because no remote path to the machine exists.
+
+Nothing surfaces the failure to the user: a schema-clean configuration is
+accepted without complaint and then silently does nothing. The only
+evidence is NetworkManager's journal, on a node that in the second case
+cannot be reached.
 
 Key points for the ticket:
 
@@ -166,6 +233,8 @@ Draft: `docs/upstream-issue-3-assisted-installer-agent-hsr-inventory.md`
 - **Benchmark harness saturates around 5000 msg/s** on this hardware -
   1,020 `udpRcvbufErrors` (receiver socket buffer, after the packets
   arrived), not wire loss. Our tooling's ceiling, not a product limit.
+  Note this explains only one of the two zero-loss failures; see the open
+  item above.
 
 ## Not yet proven
 
@@ -194,6 +263,6 @@ Stated plainly so the RFE does not over-read the green numbers:
 |---|---|
 | Full test case, root cause, verification | `docs/prp-test-case.md` |
 | Dashboard (per-test, per-run history) | https://arthur-r-oliveira.github.io/ocp-abi-local-sno/ |
-| Defect drafts | `docs/upstream-issue-{1,2,3}-*.md` |
+| Defect drafts | `docs/rhel-jira-nmstate-hsr-gen-conf.md`, `docs/upstream-issue-{1,2,3}-*.md` |
 | Test Case 3 spec + blocker | `docs/spec-test-case-3-prp-primary.md` |
 | Repo | https://github.com/arthur-r-oliveira/ocp-abi-local-sno |
