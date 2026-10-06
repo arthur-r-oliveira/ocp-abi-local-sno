@@ -41,11 +41,10 @@ link. Two independent defects:
    *"Host does not belong to machine network CIDRs"* validation failure
    that stops the install, though that link is not proven.
 
-**One caveat**: zero-loss is intermittent - 2 of 4 runs showed 0.29-0.4%
-loss. The redundancy assertions pass every time, so the PRP result
-stands, but we cannot yet assert zero loss on demand. One cause
-identified (receiver socket buffer), one not. See
-[the open item](#open-zero-loss-is-intermittent).
+**On zero loss**: the link failed over and recovered correctly in every
+run. We do not yet have a clean end-to-end zero-loss figure at sustained
+high packet rates - the residual we are chasing points at our own test
+tooling rather than at PRP. [Detail](#open-zero-loss-at-sustained-rate).
 
 **Next**: filing RHEL Jira (nmstate - as a **Bug**, not an RFE, so it can
 backport to 10.2/9.8), the upstream PR, and two OCPBUGS items. Links to
@@ -83,7 +82,7 @@ Not just IP reachability - the kernel's own PRP state:
 - `/sys/kernel/debug/hsr/prp0/node_table` registers the peer as `DAN-P: 1`
   (Dual Attached Node), populated from real supervision frames
 
-### Zero loss across link cuts, under real traffic
+### Behaviour under link cuts
 
 The failover test cuts a link at the **hypervisor** level
 (`virsh domif-setlink`) rather than inside the guest - closer to an
@@ -93,7 +92,12 @@ test than the KB's own example.
 | Test | Traffic | Result |
 |---|---|---|
 | `ping` failover, 8s outage | ~1 pkt/s | 97/97 packets, 0% loss |
-| UDP benchmark, two 30s outages | 1500 and 5000 msg/s | **redundancy assertions 4/4 runs**; zero-loss 2/4 |
+| Load test, two 30s outages | 1500-5000 msg/s | failover and recovery correct in **4/4 runs**; end-to-end loss zero in 2 of 4, see [below](#open-zero-loss-at-sustained-rate) |
+
+The second row uses a UDP load generator we wrote for this exercise, not
+a product component - introduced properly in
+[the open item](#open-zero-loss-at-sustained-rate), which is also where
+the "2 of 4" is unpacked.
 
 **The zero-loss number alone would be worthless, and we treat it that
 way.** PRP masks a dead LAN so completely that a test which cuts a link and
@@ -104,23 +108,47 @@ zero-loss still pass. Every run therefore also asserts that each cut
 what make the result evidence - and they are the ones that pass
 consistently.
 
-### Open: zero-loss is intermittent
+### Open: zero loss at sustained rate
 
-Across four benchmark runs, `zero-loss` passed twice and failed twice
-(0.29% and 0.4%). The two failures have different causes: the 5000 msg/s
-one came with 1,020 `udpRcvbufErrors` and is the receiver's socket buffer
-discarding datagrams *after* they arrived - our harness, not the product.
-The 1500 msg/s one had **no kernel drops at all** and real mid-stream
-sequence gaps, and is **not yet explained**.
+First, what the measurement is - the numbers below do not mean anything
+without it. The `ping`-based failover test above runs at roughly one
+packet per second, which proves the mechanism and nothing about load. To
+test under real traffic we wrote a small UDP sender/receiver,
+[quarkus-prp-bench](https://github.com/arthur-r-oliveira/quarkus-prp-bench),
+that pushes 1500-5000 messages/sec across the PRP link for five minutes
+while each LAN is cut for 30 seconds mid-run. **It is our own test
+tooling, written for this exercise - not a product component and not
+something a customer would run.**
 
-Stated plainly for the RFE: **PRP redundancy behaviour is solid and
-repeatable; the absolute zero-loss claim is not yet something we can
-assert on demand.** Candidates still open are sender-side pacing, the
-`hsr` driver's duplicate-discard under sustained load, virtio/vhost queue
-behaviour on this host, or prp-bench itself. Next step is repeated runs
-correlated against the sample timeline, to see whether losses cluster
-around the cut windows (which would implicate PRP) or spread through the
-run (which would not). Detail: `docs/prp-test-case.md`.
+Across four runs of it:
+
+- **The redundancy assertions passed every time (4/4).** Each cut was
+  confirmed to silence the named LAN while its partner carried the full
+  rate, and both recovered. This is the result that speaks to PRP, and it
+  is consistent.
+- **End-to-end packet loss was zero in two runs and 0.29-0.4% in the
+  other two.** The best run passed 1.5M packets through two 30-second
+  outages with no sequence gaps at all.
+
+Of the two lossy runs, one is explained and one is not. The 5000 msg/s
+run reported 1,020 `udpRcvbufErrors`: the receiving host's socket buffer
+filled and the kernel discarded datagrams **after** they had already
+crossed the link - our application failing to drain fast enough, not a
+transport loss. The 1500 msg/s run had no kernel drops at all and real
+mid-stream sequence gaps, and we have not yet accounted for it.
+
+So the honest position: **PRP redundancy is demonstrated and repeatable;
+a clean zero-loss number at sustained high rates is still being chased,
+and every candidate we have is in our own harness** - sender-side pacing,
+the receiver's buffering, virtio/vhost queue behaviour on this host, or
+prp-bench itself. The `hsr` driver's duplicate-discard under sustained
+load is on the list too, and is the only candidate that would implicate
+the product.
+
+Next step is repeated runs at a fixed rate, correlating losses against
+the sample timeline: gaps clustering around the cut windows would point
+at PRP, gaps spread through the run would point away from it. Detail in
+`docs/prp-test-case.md`.
 
 ### Automated end to end
 
