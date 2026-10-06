@@ -14,55 +14,47 @@ Last updated: 2026-10-06.
 
 ## TL;DR
 
-**PRP (IEC 62439-3) redundancy works on OpenShift SNO and is now proven
-automatically and repeatably. A single upstream `nmstate` defect blocks
-Day-0 entirely - and in the topology this RFE is really about, it leaves
-the node with no network at all. We have the root cause, a five-line fix,
-and four reports drafted.**
+**Day-2 works out of the box.** `kubernetes-nmstate-operator` + an NNCP
+produces a correct PRP link between two SNOs with no workarounds - the
+approach Red Hat's own HSR/PRP KB recommends. Validated on OCP
+**5.0.0-rc.2** (RHCOS 10.2) and **4.19.45**: `proto 1`, both ports
+carrying identical frame counters, peer registered as DAN-P in the kernel
+node table. Redundancy holds under load - cutting either LAN for 30s
+mid-run, the surviving path carries the full rate and recovers (**4/4
+runs**); best run 1.5M packets with no sequence gaps. Automated end to
+end: 3 CI workflows, **15 runs, 146 test executions, 95.9%** -
+[dashboard](https://arthur-r-oliveira.github.io/ocp-abi-local-sno/).
 
-- **Validated** on OCP **5.0.0-rc.2** (RHCOS / RHEL 10.2) and **4.19.45**:
-  two SNO clusters joined by a kernel `hsr` PRP link, correct at the
-  protocol level (`proto 1`, identical counters on both ports, peer
-  registered `DAN-P: 1` from real supervision frames).
-- **Redundancy holds under load.** Cutting either LAN for 30 seconds
-  mid-run, at 1500 and 5000 msg/s, the surviving path carries the full
-  rate and recovers - **4/4 runs, 8/8 redundancy assertions in CI**.
-  Sub-millisecond RTT (p50 434 us).
-- **The absolute "zero packet loss" claim is not yet reproducible.** Best
-  run is real: 1.5M packets, no sequence gaps, through two outages. But
-  across four runs it passed twice and failed twice, at 0.29-0.4% loss.
-  One failure is explained (receiver socket buffer); **one is not**. See
-  [the open item](#open-zero-loss-is-intermittent). This does not affect
-  the redundancy result, but we cannot assert zero loss on demand today.
-- **Day-0 is blocked by an upstream `nmstate` defect.** Its offline keyfile
-  writer has no `hsr` branch, so the generated profile is invalid and
-  `prp0` never exists at first boot. **Not an OpenShift bug** -
-  reproducible with stock `nmstatectl`, no installer involved.
-  **Severity depends on topology**: as a side network the interface is
-  silently absent and recoverable Day-2; as the **primary or only
-  address-bearing interface - the substation/rail case this RFE targets -
-  the node comes up with no connectivity whatsoever.** No DNS, no
-  registry, no SSH; diagnosis needs a `dracut` shell on the console. A
-  schema-valid config is accepted without complaint and silently does
-  nothing.
-- **Day-2 works and matches Red Hat's own guidance.**
-  `kubernetes-nmstate-operator` + an NNCP produces a correct `prp0` - the
-  approach our HSR/PRP KB explicitly recommends.
-- **Fully automated**: 3 CI workflows on a self-hosted KVM lab, bare metal
-  to passing failover and benchmark, publishing to a dashboard.
-  **15 runs, 146 test executions, 95.2%.**
-- **Four reports drafted, none filed**, with a deliberate order: **RHEL
-  Jira first** (it is what creates a backport into a shipped package),
-  then the upstream fix, then the two OpenShift-side items. Note Bugzilla
-  is retired for new RHEL and OpenShift product bugs - these go to Jira at
-  issues.redhat.com.
+**Day-0 does not work**, which blocks PRP as the cluster's primary
+network under `br-ex` - the substation/rail case where PRP is the only
+link. Two independent defects:
 
-**Asks**: (1) go-ahead to file, and a steer on the RHEL Jira since that is
-the one that produces a shipped fix; (2) confirmation that
-`kubernetes-nmstate-operator` lands in OCP 5.0's default catalog before GA
-- it is currently in none of the three; (3) which topologies matter for GA
-(Test Case 3 and TNF are specified but not passing - see
-[Not yet proven](#not-yet-proven)).
+1. **`nmstatectl gc` drops the `[hsr]` section**, generating a
+   NetworkManager profile that will not load, so `prp0` never exists at
+   first boot. Not an OpenShift bug - reproducible with stock nmstate, no
+   installer involved. Never implemented rather than regressed: `hsr` has
+   never appeared under `gen_conf/` in any commit since HSR landed in
+   Nov 2023. Five-line fix identified; we can submit the PR.
+2. **Assisted-Installer does not support HSR yet** - its inventory
+   collector drops `hsr` interfaces entirely (vendored netlink library
+   predates HSR), so the host never reports `prp0`. Consistent with the
+   *"Host does not belong to machine network CIDRs"* validation failure
+   that stops the install, though that link is not proven.
+
+**One caveat**: zero-loss is intermittent - 2 of 4 runs showed 0.29-0.4%
+loss. The redundancy assertions pass every time, so the PRP result
+stands, but we cannot yet assert zero loss on demand. One cause
+identified (receiver socket buffer), one not. See
+[the open item](#open-zero-loss-is-intermittent).
+
+**Next**: filing RHEL Jira (nmstate - as a **Bug**, not an RFE, so it can
+backport to 10.2/9.8), the upstream PR, and two OCPBUGS items. Links to
+follow.
+
+**Ask**: confirm `kubernetes-nmstate-operator` lands in OCP 5.0's default
+catalog before GA - it is in none of the three today, so every PRP
+deployment on 5.0 currently needs a workaround. Full asks:
+[below](#asks).
 
 ---
 
@@ -190,9 +182,33 @@ Key points for the ticket:
   installer involved. OpenShift inherits it.
 - **Not a version mismatch.** Confirmed in the installed build (2.2.60) and
   still present on upstream `base` as of 2026-10-06.
-- **Never implemented, not regressed**: the original HSR/PRP PR (#2469) and
-  the later #3035 / #3046 all touched `nm_dbus/connection/` and nothing
-  under `nm_dbus/gen_conf/`.
+- **Not a regression - verified against git history, not inferred.**
+  `hsr` has never appeared in any file under `gen_conf/`, on any branch,
+  in any commit (`git log --all -S'hsr' -- .../gen_conf/` is empty; the
+  same query for `vrf` returns commits, confirming the method). All five
+  commits touching HSR since `b23da648` (2023-11-20) stayed on the D-Bus
+  side - the original HSR/PRP work (#2469) and the later #3035 and #3046
+  all touched `nm_dbus/connection/` and nothing under `nm_dbus/gen_conf/`.
+  The offline path has been broken since the feature's first commit,
+  about two years. Still present in **2.2.62**, the current
+  CentOS Stream 10 build.
+- **Which is why classification matters.** "Never worked" normally argues
+  for RFE and lower priority. The counter-argument, and the one the draft
+  leads with: HSR/PRP was shipped **GA in RHEL 10.2** and documented in a
+  customer-facing KB specifying exactly the schema in the reproducer,
+  while one of the two paths consuming that schema silently emits an
+  unloadable profile. That is a gap between stated support and actual
+  behaviour, not a wishlist item. Fallback if triage disagrees: silently
+  discarding a configured setting instead of erroring is a bug on any
+  reading.
+- **Backport is routine for this package.** CentOS Stream `nmstate`
+  (2.2.62) already carries upstream cherry-picks as `git format-patch`
+  files wired in via `Patch0001:` in the spec. Our change is purely
+  additive, fires only when `self.hsr` is `Some`, and touches no API,
+  ABI, schema or dependency - so the regression-risk case is short. The
+  ask is 10.2 and 9.8 z-streams plus the next minor via CentOS Stream.
+  **Unverified**: whether 9.8 actually needs it (GA from 9.8 per the KB,
+  but only 10.2 was tested) and whether those are EUS streams.
 - The live D-Bus path handles `hsr` correctly, which is exactly why `nmcli`
   and the Day-2 operator both work.
 - **`ipvlan` appears to have the same gap**, found while tracing this.
@@ -256,6 +272,32 @@ Stated plainly so the RFE does not over-read the green numbers:
 - **Scale is two nodes.** No multi-node PRP group, no redundancy box
   (RedBox), no SAN/DAN mix beyond the two DAN-Ps.
 - **5.0.0-rc.2 is a release candidate**, not GA.
+
+## Asks
+
+1. **Go-ahead to file, and backing for Bug over RFE on the RHEL Jira**,
+   plus a z-stream backport request for 10.2 and 9.8. "Never implemented"
+   reads naturally as an enhancement, and enhancements are not normally
+   backported - so this one field decides whether any shipped release
+   gets a fix while the KB keeps telling customers HSR/PRP is supported.
+   Everything else here is reporting; this is the decision.
+2. **Confirmation that `kubernetes-nmstate-operator` lands in OCP 5.0's
+   default catalog before GA** - it is currently in none of the three, so
+   every PRP deployment on 5.0 needs a workaround today. This one has
+   someone else's schedule attached, so it is the most time-sensitive.
+3. **Which topologies matter for GA** - Test Case 3 and TNF are specified
+   but not passing (see [Not yet proven](#not-yet-proven)).
+4. **A pointer to the original HSR/PRP request**, if it was raised
+   through a Red Hat channel. The upstream feature request
+   (`nmstate#2302`, still open) was filed by someone else, so we cannot
+   currently open with "this is the feature committed to in X, and the
+   offline half was never built" - which would be the strongest framing
+   available to the Jira.
+
+Two things worth settling before filing: whether **9.8** actually needs
+the backport (GA from 9.8 per the KB, but only 10.2 was tested - running
+the reproducer on a 9.8 host turns a hedge into a fact), and whether
+9.8/10.2 are **EUS** streams, which affects the backport window.
 
 ## Where the evidence lives
 
