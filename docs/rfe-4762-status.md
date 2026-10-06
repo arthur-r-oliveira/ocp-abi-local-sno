@@ -56,13 +56,35 @@ and four reports drafted.**
   then the upstream fix, then the two OpenShift-side items. Note Bugzilla
   is retired for new RHEL and OpenShift product bugs - these go to Jira at
   issues.redhat.com.
+- **It must be filed as a Bug, not an RFE.** `gen_conf` never supported
+  `hsr` - verified against upstream history, not inferred - so
+  "enhancement" is the natural reading and the expensive one: RFEs are not
+  normally backported, so 10.2 and 9.8 would never get a fix while the KB
+  keeps telling customers the configuration is supported. **This single
+  field decides whether any shipped release is fixed.**
+- **The backport is mechanically routine.** The CentOS Stream `nmstate`
+  package already carries upstream cherry-picks as spec patches, and our
+  change is purely additive with no API, ABI, schema or dependency impact.
+  The obstacle is justification, not risk - which is why this RFE is worth
+  citing on the Jira.
 
-**Asks**: (1) go-ahead to file, and a steer on the RHEL Jira since that is
-the one that produces a shipped fix; (2) confirmation that
-`kubernetes-nmstate-operator` lands in OCP 5.0's default catalog before GA
-- it is currently in none of the three; (3) which topologies matter for GA
-(Test Case 3 and TNF are specified but not passing - see
-[Not yet proven](#not-yet-proven)).
+**Asks**:
+
+1. **Go-ahead to file, and backing for Bug over RFE on the RHEL Jira**,
+   plus a z-stream backport request for 10.2 and 9.8. This is the one
+   that decides whether customers on a shipped release ever get a fix;
+   everything else here is reporting.
+2. **Confirmation that `kubernetes-nmstate-operator` lands in OCP 5.0's
+   default catalog before GA** - it is currently in none of the three, so
+   every PRP deployment on 5.0 needs a workaround today. This one has
+   someone else's schedule attached, so it is the most time-sensitive.
+3. **Which topologies matter for GA** - Test Case 3 and TNF are specified
+   but not passing (see [Not yet proven](#not-yet-proven)).
+4. **A pointer to the original HSR/PRP request**, if it was raised through
+   a Red Hat channel. The upstream feature request (`nmstate#2302`, still
+   open) was filed by someone else, so we cannot currently cite "this is
+   the feature committed to in X, and the offline half was never built" -
+   which would be the strongest opening the Jira could have.
 
 ---
 
@@ -190,9 +212,33 @@ Key points for the ticket:
   installer involved. OpenShift inherits it.
 - **Not a version mismatch.** Confirmed in the installed build (2.2.60) and
   still present on upstream `base` as of 2026-10-06.
-- **Never implemented, not regressed**: the original HSR/PRP PR (#2469) and
-  the later #3035 / #3046 all touched `nm_dbus/connection/` and nothing
-  under `nm_dbus/gen_conf/`.
+- **Not a regression - verified against git history, not inferred.**
+  `hsr` has never appeared in any file under `gen_conf/`, on any branch,
+  in any commit (`git log --all -S'hsr' -- .../gen_conf/` is empty; the
+  same query for `vrf` returns commits, confirming the method). All five
+  commits touching HSR since `b23da648` (2023-11-20) stayed on the D-Bus
+  side - the original HSR/PRP work (#2469) and the later #3035 and #3046
+  all touched `nm_dbus/connection/` and nothing under `nm_dbus/gen_conf/`.
+  The offline path has been broken since the feature's first commit,
+  about two years. Still present in **2.2.62**, the current
+  CentOS Stream 10 build.
+- **Which is why classification matters.** "Never worked" normally argues
+  for RFE and lower priority. The counter-argument, and the one the draft
+  leads with: HSR/PRP was shipped **GA in RHEL 10.2** and documented in a
+  customer-facing KB specifying exactly the schema in the reproducer,
+  while one of the two paths consuming that schema silently emits an
+  unloadable profile. That is a gap between stated support and actual
+  behaviour, not a wishlist item. Fallback if triage disagrees: silently
+  discarding a configured setting instead of erroring is a bug on any
+  reading.
+- **Backport is routine for this package.** CentOS Stream `nmstate`
+  (2.2.62) already carries upstream cherry-picks as `git format-patch`
+  files wired in via `Patch0001:` in the spec. Our change is purely
+  additive, fires only when `self.hsr` is `Some`, and touches no API,
+  ABI, schema or dependency - so the regression-risk case is short. The
+  ask is 10.2 and 9.8 z-streams plus the next minor via CentOS Stream.
+  **Unverified**: whether 9.8 actually needs it (GA from 9.8 per the KB,
+  but only 10.2 was tested) and whether those are EUS streams.
 - The live D-Bus path handles `hsr` correctly, which is exactly why `nmcli`
   and the Day-2 operator both work.
 - **`ipvlan` appears to have the same gap**, found while tracing this.
